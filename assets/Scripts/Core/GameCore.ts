@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Animation, CCFloat, Input, input } from 'cc';
+import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input } from 'cc';
 const { ccclass, property } = _decorator;
 
 /**
@@ -13,6 +13,7 @@ interface StackLetter {
   originalWorldPos: Vec3; // исходная мировая позиция
   originalScale: Vec3; // исходный масштаб
   taken: boolean;      // взята ли буква
+  bankPlaced: boolean; // буква полностью размещена в Word_Bank (полёт + settle)
 }
 
 /**
@@ -46,6 +47,12 @@ export class GameCore extends Component {
   @property({ type: Node, tooltip: 'Нода эффекта ошибки (Fail)' })
   failEffect: Node = null;
 
+  @property({ type: Node, tooltip: 'Glow-эффект выбора (VFX/GlowEffect/glow)' })
+  glowEffect: Node = null;
+
+  @property({ type: Node, tooltip: 'Слой поверх VFX для полёта букв к корзине (опционально)' })
+  lettersFlightLayer: Node = null;
+
   // ===== ПАРАМЕТРЫ =====
 
   @property({ type: CCFloat, tooltip: 'Масштаб буквы в зоне ввода' })
@@ -68,6 +75,84 @@ export class GameCore extends Component {
 
   @property({ type: CCFloat, tooltip: 'Максимальный множитель масштаба буквы в слоте' })
   slotScaleMax: number = 2.0;
+
+  @property({ type: CCFloat, tooltip: 'Высота плавного подъема буквы при выборе' })
+  selectLiftY: number = 14;
+
+  @property({ type: CCFloat, tooltip: 'Длительность подъема буквы (сек)' })
+  selectLiftDuration: number = 0.16;
+
+  @property({ type: CCFloat, tooltip: 'Пауза в верхней точке (сек)' })
+  selectHoldDuration: number = 0.05;
+
+  @property({ type: CCFloat, tooltip: 'Длительность опускания буквы (сек)' })
+  selectSettleDuration: number = 0.14;
+
+  @property({ type: CCFloat, tooltip: 'Легкий scale-пульс при выборе (1.04 = +4%)' })
+  selectPulseScale: number = 1.04;
+
+  @property({ type: CCFloat, tooltip: 'Длительность fail effect (сек)' })
+  failEffectDuration: number = 0.42;
+
+  @property({ type: CCFloat, tooltip: 'Подпрыг буквы в Word_Bank (px)' })
+  bankSettleLiftY: number = 20;
+
+  @property({ type: CCFloat, tooltip: 'Поворот буквы в Word_Bank (градусы Z)' })
+  bankSettleRotateZ: number = 12;
+
+  @property({ type: CCFloat, tooltip: 'Длительность основного подъема settle (сек)' })
+  bankSettleUpDuration: number = 0.11;
+
+  @property({ type: CCFloat, tooltip: 'Длительность основного приземления settle (сек)' })
+  bankSettleDownDuration: number = 0.15;
+
+  @property({ type: CCFloat, tooltip: 'Скорость settle в банке (1 = норм, больше = быстрее)' })
+  bankSettlePlaybackSpeed: number = 1.25;
+
+  @property({ type: CCFloat, tooltip: 'Высота второго отскока от основного (0..1)' })
+  bankSettleSecondBounceRatio: number = 0.45;
+
+  @property({ type: CCFloat, tooltip: 'Высота стопки букв над корзиной (px)' })
+  crateHoverOffsetY: number = 75;
+
+  @property({ type: CCFloat, tooltip: 'Смещение букв в стопке над корзиной (px)' })
+  crateStackOffsetY: number = 6;
+
+  @property({ type: CCFloat, tooltip: 'Длительность полета буквы к корзине (сек)' })
+  crateFlyDuration: number = 0.28;
+
+  @property({ type: CCFloat, tooltip: 'Задержка между вылетом букв к корзине (сек)' })
+  crateFlyStagger: number = 0.1;
+
+  @property({ type: CCFloat, tooltip: 'Пауза над корзиной перед падением (сек)' })
+  crateHoverHoldDuration: number = 0.4;
+
+  @property({ type: CCFloat, tooltip: 'Длительность падения буквы в корзину (сек)' })
+  crateDropDuration: number = 0.14;
+
+  @property({ type: CCFloat, tooltip: 'Задержка между падениями букв (сек)' })
+  crateDropStagger: number = 0.08;
+
+  @property({ type: CCFloat, tooltip: 'Смещение падения внутрь корзины (px, отрицательное = вниз)' })
+  crateDropOffsetY: number = -18;
+
+  @property({ type: CCFloat, tooltip: 'Масштаб буквы при полете к корзине (от текущего)' })
+  crateFlyScale: number = 0.92;
+
+  @property({ type: CCFloat, tooltip: 'Пауза после settle последней буквы перед подскоком слова (сек)' })
+  wordSuccessPreDelay: number = 0.1;
+
+  @property({ type: CCFloat, tooltip: 'Высота общего подскока собранного слова (px)' })
+  wordBounceLiftY: number = 18;
+
+  @property({ type: CCFloat, tooltip: 'Длительность подъема при подскоке слова (сек)' })
+  wordBounceUpDuration: number = 0.12;
+
+  @property({ type: CCFloat, tooltip: 'Длительность приземления при подскоке слова (сек)' })
+  wordBounceDownDuration: number = 0.16;
+
+  @property({ type: CCFloat, tooltip: 'Пауза после подскока слова перед полетом в корзину (сек)' })
+  wordSuccessPostBounceDelay: number = 0.2;
 
   // ===== ВНУТРЕННИЕ ДАННЫЕ =====
 
@@ -92,6 +177,10 @@ export class GameCore extends Component {
 
   // Флаг обработки (блокировка во время анимации возврата)
   private isProcessing: boolean = false;
+  private isSelectFeedbackPlaying: boolean = false;
+  private glowHomeParent: Node = null;
+  private letterFlyToken: number = 0;
+  private crateSequenceToken: number = 0;
 
   start() {
     console.log('═══════════════════════════════════');
@@ -100,8 +189,58 @@ export class GameCore extends Component {
     this.buildStacks();
     this.setupStamps();
     this.collectWordBankSlots();
+    this.setupGlowEffect();
+    this.setupFailEffect();
     this.setupGlobalInput();
     console.log('✓ GameCore: игра готова, кликайте на стопки!');
+  }
+
+  private setupGlowEffect(): void {
+    if (!this.glowEffect) {
+      console.warn('GameCore: glowEffect не назначен в Inspector (VFX/GlowEffect/glow)');
+      return;
+    }
+
+    this.glowHomeParent = this.glowEffect.parent;
+    this.glowEffect.active = false;
+  }
+
+  private setupFailEffect(): void {
+    if (!this.failEffect) {
+      return;
+    }
+
+    this.failEffect.active = false;
+    this.resetFailVisual();
+  }
+
+  private getFailAnimation(): Animation | null {
+    if (!this.failEffect) {
+      return null;
+    }
+
+    return this.failEffect.getComponent(Animation)
+      ?? this.failEffect.getComponentInChildren(Animation);
+  }
+
+  private getFailVisualNode(): Node | null {
+    if (!this.failEffect) {
+      return null;
+    }
+
+    const anim = this.getFailAnimation();
+    return anim ? anim.node : this.failEffect;
+  }
+
+  private resetFailVisual(): void {
+    const visualNode = this.getFailVisualNode();
+    const anim = this.getFailAnimation();
+    if (!visualNode) {
+      return;
+    }
+
+    anim?.stop();
+    visualNode.setScale(0, 0, 1);
   }
 
   /**
@@ -213,7 +352,8 @@ export class GameCore extends Component {
       originalPos: node.position.clone(),
       originalWorldPos: node.worldPosition.clone(),
       originalScale: node.scale.clone(),
-      taken: false
+      taken: false,
+      bankPlaced: false
     };
 
     stack.letters.push(stackLetter);
@@ -272,7 +412,7 @@ export class GameCore extends Component {
   }
 
   private onGlobalTouch(event: EventTouch): void {
-    if (this.isProcessing) {
+    if (this.isProcessing || this.isSelectFeedbackPlaying) {
       return;
     }
 
@@ -322,7 +462,7 @@ export class GameCore extends Component {
    * Берёт верхнюю доступную букву стопки.
    */
   private onStackClicked(stack: LetterStack): void {
-    if (this.isProcessing) {
+    if (this.isProcessing || this.isSelectFeedbackPlaying) {
       return;
     }
 
@@ -336,21 +476,26 @@ export class GameCore extends Component {
 
     // Отметить букву как взятую
     topLetter.taken = true;
+    topLetter.bankPlaced = false;
 
     // Добавить в выбор
     this.selectedLetters.push(topLetter);
 
+    const invalidSelection = this.isInvalidWordSelection();
+
     // Отсоединить букву от родителя, чтобы двигалась ТОЛЬКО она
     this.detachLetter(topLetter);
 
-    // Переместить в Word_Bank
-    this.moveLetterToWordBank(topLetter);
-
-    const currentWord = this.selectedLetters.map(l => l.letter).join('');
-    console.log(`   ✓ Текущее слово: "${currentWord}"`);
-
-    // Проверить слово
-    this.checkWord();
+    this.isSelectFeedbackPlaying = true;
+    this.playSelectFeedback(topLetter, () => {
+      this.isSelectFeedbackPlaying = false;
+      if (invalidSelection) {
+        console.log(`   ❌ НЕВЕРНАЯ комбинация: "${this.getCurrentWord()}"`);
+        this.onWordError();
+        return;
+      }
+      this.moveLetterToWordBank(topLetter);
+    });
   }
 
   /**
@@ -378,15 +523,80 @@ export class GameCore extends Component {
     sl.node.worldScale = worldScale;
   }
 
-  /**
-   * Переместить букву в зону ввода (Word_Bank)
-   */
-  private moveLetterToWordBank(sl: StackLetter): void {
-    if (!this.wordBank) {
-      console.warn('GameCore: wordBank не назначен');
+  private playSelectFeedback(sl: StackLetter, onComplete: () => void): void {
+    const node = sl.node;
+    const startWorldPos = node.worldPosition.clone();
+    const startScale = node.scale.clone();
+    const liftedWorldPos = startWorldPos.clone();
+    liftedWorldPos.y += this.selectLiftY;
+    const pulseScale = new Vec3(
+      startScale.x * this.selectPulseScale,
+      startScale.y * this.selectPulseScale,
+      startScale.z
+    );
+
+    Tween.stopAllByTarget(node);
+    this.showGlowOnLetter(node);
+
+    tween(node)
+      .to(this.selectLiftDuration, { worldPosition: liftedWorldPos, scale: pulseScale }, { easing: 'sineOut' })
+      .delay(this.selectHoldDuration)
+      .to(this.selectSettleDuration, { worldPosition: startWorldPos, scale: startScale }, { easing: 'sineInOut' })
+      .call(() => {
+        this.hideGlowEffect();
+        onComplete();
+      })
+      .start();
+  }
+
+  private showGlowOnLetter(letterNode: Node): void {
+    if (!this.glowEffect || !this.glowEffect.isValid) {
       return;
     }
 
+    Tween.stopAllByTarget(this.glowEffect);
+    this.glowEffect.setParent(letterNode, true);
+    this.glowEffect.setPosition(0, 0, -1);
+    this.glowEffect.active = true;
+
+    const anim = this.glowEffect.getComponent(Animation);
+    if (anim) {
+      anim.stop();
+      anim.play();
+    }
+  }
+
+  private hideGlowEffect(): void {
+    if (!this.glowEffect || !this.glowEffect.isValid) {
+      return;
+    }
+
+    const anim = this.glowEffect.getComponent(Animation);
+    if (anim) {
+      anim.stop();
+    }
+
+    if (this.glowHomeParent && this.glowHomeParent.isValid) {
+      this.glowEffect.setParent(this.glowHomeParent, true);
+    }
+
+    this.glowEffect.active = false;
+  }
+
+  /**
+   * Переместить букву в зону ввода (Word_Bank)
+   */
+  private moveLetterToWordBank(sl: StackLetter, onComplete?: () => void): void {
+    if (!this.wordBank) {
+      console.warn('GameCore: wordBank не назначен');
+      sl.bankPlaced = true;
+      onComplete?.();
+      this.onLetterBankPlacementComplete();
+      return;
+    }
+
+    sl.bankPlaced = false;
+    const flyToken = ++this.letterFlyToken;
     const slotNode = this.getFirstFreeWordBankSlot();
     let targetWorldPos: Vec3;
     let targetScale = new Vec3(this.selectScale, this.selectScale, 1);
@@ -406,19 +616,126 @@ export class GameCore extends Component {
       );
     }
 
+    Tween.stopAllByTarget(sl.node);
     tween(sl.node)
       .to(this.animDuration, {
         worldPosition: targetWorldPos,
         scale: targetScale
-      })
+      }, { easing: 'cubicOut' })
       .call(() => {
+        if (flyToken !== this.letterFlyToken || !sl.node.isValid) {
+          return;
+        }
+
         if (slotNode && slotNode.isValid) {
           // После прилета фиксируем букву в центре слота
           sl.node.setParent(slotNode, true);
           sl.node.setPosition(0, 0, 0);
+          sl.node.setSiblingIndex(slotNode.children.length - 1);
+          this.playWordBankSettle(sl.node, this.selectedLetters.length - 1, () => {
+            this.finishLetterBankPlacement(sl, onComplete);
+          });
+          return;
         }
+
+        this.finishLetterBankPlacement(sl, onComplete);
       })
       .start();
+  }
+
+  private finishLetterBankPlacement(sl: StackLetter, onComplete?: () => void): void {
+    sl.bankPlaced = true;
+    onComplete?.();
+    this.onLetterBankPlacementComplete();
+  }
+
+  private onLetterBankPlacementComplete(): void {
+    const currentWord = this.getCurrentWord();
+
+    if (this.isInvalidWordSelection()) {
+      if (!this.isProcessing) {
+        console.log(`   ❌ НЕВЕРНАЯ комбинация: "${currentWord}"`);
+        this.onWordError();
+      }
+      return;
+    }
+
+    if (!this.areAllSelectedLettersPlacedInBank()) {
+      const placedCount = this.selectedLetters.filter(sl => sl.bankPlaced).length;
+      console.log(`   ⏳ Буквы в банке: ${placedCount}/${this.selectedLetters.length} ("${currentWord}")`);
+      return;
+    }
+
+    console.log(`   ✓ Все буквы на месте: "${currentWord}"`);
+    this.checkWord();
+  }
+
+  private getCurrentWord(): string {
+    return this.selectedLetters.map((sl: StackLetter) => sl.letter).join('');
+  }
+
+  private isInvalidWordSelection(): boolean {
+    const currentWord = this.getCurrentWord();
+    if (this.validWords.includes(currentWord)) {
+      return this.usedWords.has(currentWord);
+    }
+
+    return !this.validWords.some((word: string) => word.startsWith(currentWord));
+  }
+
+  private areAllSelectedLettersPlacedInBank(): boolean {
+    if (this.selectedLetters.length === 0) {
+      return false;
+    }
+
+    return this.selectedLetters.every((sl: StackLetter) => {
+      return sl.bankPlaced && sl.node.isValid && this.isLetterInWordBankSlot(sl);
+    });
+  }
+
+  private isLetterInWordBankSlot(sl: StackLetter): boolean {
+    const parent = sl.node.parent;
+    if (!parent || !parent.isValid) {
+      return false;
+    }
+
+    if (this.wordBankSlots.includes(parent)) {
+      return true;
+    }
+
+    return parent.name.toLowerCase().startsWith('slot_');
+  }
+
+  private playWordBankSettle(letterNode: Node, slotIndex: number, onComplete?: () => void): void {
+    Tween.stopAllByTarget(letterNode);
+    letterNode.setPosition(0, 0, 0);
+    letterNode.setRotationFromEuler(0, 0, 0);
+
+    const rotateDir = slotIndex % 2 === 0 ? 1 : -1;
+    const restPos = new Vec3(0, 0, 0);
+    const restEuler = new Vec3(0, 0, 0);
+    const mainLift = new Vec3(0, this.bankSettleLiftY, 0);
+    const secondLift = new Vec3(0, this.bankSettleLiftY * this.bankSettleSecondBounceRatio, 0);
+    const tiltEuler = new Vec3(0, 0, this.bankSettleRotateZ * rotateDir);
+    const halfTiltEuler = new Vec3(0, 0, this.bankSettleRotateZ * rotateDir * 0.35);
+
+    const up1 = this.getBankSettleDuration(this.bankSettleUpDuration);
+    const down1 = this.getBankSettleDuration(this.bankSettleDownDuration);
+    const up2 = this.getBankSettleDuration(this.bankSettleUpDuration * 0.55);
+    const down2 = this.getBankSettleDuration(this.bankSettleDownDuration * 0.45);
+
+    tween(letterNode)
+      .to(up1, { position: mainLift, eulerAngles: tiltEuler }, { easing: 'quadOut' })
+      .to(down1, { position: restPos, eulerAngles: halfTiltEuler }, { easing: 'bounceOut' })
+      .to(up2, { position: secondLift, eulerAngles: halfTiltEuler }, { easing: 'quadOut' })
+      .to(down2, { position: restPos, eulerAngles: restEuler }, { easing: 'sineIn' })
+      .call(() => onComplete?.())
+      .start();
+  }
+
+  private getBankSettleDuration(baseDuration: number): number {
+    const speed = Math.max(0.1, this.bankSettlePlaybackSpeed);
+    return baseDuration / speed;
   }
 
   private getFirstFreeWordBankSlot(): Node | null {
@@ -464,53 +781,287 @@ export class GameCore extends Component {
    * Проверить составлено ли валидное слово
    */
   private checkWord(): void {
-    const currentWord = this.selectedLetters.map(l => l.letter).join('');
+    const currentWord = this.getCurrentWord();
 
-    // Проверить точное совпадение со словом
-    if (this.validWords.includes(currentWord)) {
-      if (this.usedWords.has(currentWord)) {
-        console.log(`   ⚠️ Слово "${currentWord}" уже использовано`);
-        this.onWordError();
-      } else {
-        console.log(`   ✅ ПРАВИЛЬНОЕ СЛОВО: "${currentWord}"`);
-        this.onWordSuccess(currentWord);
-      }
+    if (this.isInvalidWordSelection()) {
+      console.log(`   ❌ НЕВЕРНАЯ комбинация: "${currentWord}"`);
+      this.onWordError();
       return;
     }
 
-    // Проверить является ли началом какого-то слова
-    const isPrefix = this.validWords.some(w => w.startsWith(currentWord));
-
-    if (!isPrefix) {
-      console.log(`   ❌ НЕВЕРНАЯ комбинация: "${currentWord}"`);
-      this.onWordError();
-    } else {
-      console.log(`   ⏳ "${currentWord}" - возможное начало слова`);
+    if (this.validWords.includes(currentWord)) {
+      console.log(`   ✅ ПРАВИЛЬНОЕ СЛОВО: "${currentWord}"`);
+      this.onWordSuccess(currentWord);
+      return;
     }
+
+    console.log(`   ⏳ "${currentWord}" - возможное начало слова`);
   }
 
   /**
    * Слово собрано правильно
    */
   private onWordSuccess(word: string): void {
+    if (!this.areAllSelectedLettersPlacedInBank()) {
+      console.log(`   ⏳ Ждём все буквы в банке перед успехом: "${word}"`);
+      return;
+    }
+
     this.isProcessing = true;
-
     this.usedWords.add(word);
-    this.showStampByWord(word);
 
-    // Буквы остаются "проданными" - не возвращаются, но выбор очищается
-    this.scheduleOnce(() => {
+    const letters = [...this.selectedLetters];
+    const crateNode = this.findCrateByWord(word);
+
+    if (!crateNode || letters.length === 0) {
+      this.showStampByWord(word);
       this.hideSelectedLetters();
       this.clearSelection();
       this.isProcessing = false;
-    }, 0.5);
+      return;
+    }
+
+    this.scheduleOnce(() => {
+      this.playWordBounce(letters, () => {
+        this.scheduleOnce(() => {
+          this.prepareLettersForCrateFlight(letters);
+          this.playWordSuccessCrateSequence(word, letters, crateNode);
+        }, this.wordSuccessPostBounceDelay);
+      });
+    }, this.wordSuccessPreDelay);
+  }
+
+  private playWordBounce(letters: StackLetter[], onComplete: () => void): void {
+    if (letters.length === 0) {
+      onComplete();
+      return;
+    }
+
+    let completed = 0;
+    const total = letters.length;
+
+    letters.forEach((sl: StackLetter) => {
+      const node = sl.node;
+      if (!node.isValid) {
+        if (++completed >= total) {
+          onComplete();
+        }
+        return;
+      }
+
+      Tween.stopAllByTarget(node);
+      const restPos = node.position.clone();
+      const liftPos = new Vec3(restPos.x, restPos.y + this.wordBounceLiftY, restPos.z);
+
+      tween(node)
+        .to(this.wordBounceUpDuration, { position: liftPos }, { easing: 'quadOut' })
+        .to(this.wordBounceDownDuration, { position: restPos }, { easing: 'bounceOut' })
+        .call(() => {
+          if (++completed >= total) {
+            onComplete();
+          }
+        })
+        .start();
+    });
+  }
+
+  private findCrateByWord(word: string): Node | null {
+    if (!this.cratesContainer) {
+      return null;
+    }
+
+    const target = word.toLowerCase();
+    for (const crateRoot of this.cratesContainer.children) {
+      if (this.nodeContainsName(crateRoot, target)) {
+        return crateRoot;
+      }
+    }
+
+    return null;
+  }
+
+  private nodeContainsName(node: Node, nameLower: string): boolean {
+    if (node.name.toLowerCase() === nameLower) {
+      return true;
+    }
+
+    for (const child of node.children) {
+      if (this.nodeContainsName(child, nameLower)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private prepareLettersForCrateFlight(letters: StackLetter[]): void {
+    const flightLayer = this.getLettersFlightLayer();
+
+    letters.forEach((sl: StackLetter, index: number) => {
+      Tween.stopAllByTarget(sl.node);
+      const worldPos = sl.node.worldPosition.clone();
+      const worldScale = sl.node.worldScale.clone();
+      sl.node.setParent(flightLayer, true);
+      sl.node.worldPosition = worldPos;
+      sl.node.worldScale = worldScale;
+      sl.node.setRotationFromEuler(0, 0, 0);
+      sl.node.setSiblingIndex(index);
+    });
+
+    this.bringLettersFlightLayerToFront();
+    this.occupiedWordBankSlots.clear();
+  }
+
+  private getLettersFlightLayer(): Node {
+    if (this.lettersFlightLayer && this.lettersFlightLayer.isValid) {
+      return this.lettersFlightLayer;
+    }
+
+    const canvas = this.findCanvasNode();
+    let layer = canvas.getChildByName('LettersFlightLayer');
+    if (!layer) {
+      layer = new Node('LettersFlightLayer');
+      layer.layer = this.lettersContainer ? this.lettersContainer.layer : canvas.layer;
+      layer.setParent(canvas);
+    }
+
+    this.lettersFlightLayer = layer;
+    this.bringLettersFlightLayerToFront();
+    return layer;
+  }
+
+  private bringLettersFlightLayerToFront(): void {
+    const layer = this.lettersFlightLayer;
+    if (!layer || !layer.isValid || !layer.parent) {
+      return;
+    }
+
+    layer.setSiblingIndex(layer.parent.children.length - 1);
+  }
+
+  private findCanvasNode(): Node {
+    let node: Node | null = this.lettersContainer ?? this.node;
+    while (node) {
+      if (node.name === 'Canvas') {
+        return node;
+      }
+      node = node.parent;
+    }
+
+    return this.lettersContainer ?? this.node;
+  }
+
+  private playWordSuccessCrateSequence(word: string, letters: StackLetter[], crateNode: Node): void {
+    const token = ++this.crateSequenceToken;
+    const crateWorld = crateNode.worldPosition.clone();
+    let completedFlies = 0;
+
+    letters.forEach((sl: StackLetter, index: number) => {
+      const targetPos = new Vec3(
+        crateWorld.x,
+        crateWorld.y + this.crateHoverOffsetY + index * this.crateStackOffsetY,
+        crateWorld.z
+      );
+      const flyScale = new Vec3(
+        sl.node.scale.x * this.crateFlyScale,
+        sl.node.scale.y * this.crateFlyScale,
+        sl.node.scale.z
+      );
+
+      this.scheduleOnce(() => {
+        if (token !== this.crateSequenceToken) {
+          return;
+        }
+
+        tween(sl.node)
+          .to(this.crateFlyDuration, {
+            worldPosition: targetPos,
+            scale: flyScale,
+            eulerAngles: new Vec3(0, 0, 0)
+          }, { easing: 'cubicOut' })
+          .call(() => {
+            if (token !== this.crateSequenceToken) {
+              return;
+            }
+
+            completedFlies++;
+            if (completedFlies >= letters.length) {
+              this.scheduleOnce(() => {
+                if (token !== this.crateSequenceToken) {
+                  return;
+                }
+                this.dropLettersIntoCrate(word, letters, crateNode, letters.length - 1, token);
+              }, this.crateHoverHoldDuration);
+            }
+          })
+          .start();
+      }, index * this.crateFlyStagger);
+    });
+  }
+
+  private dropLettersIntoCrate(
+    word: string,
+    letters: StackLetter[],
+    crateNode: Node,
+    index: number,
+    token: number
+  ): void {
+    if (token !== this.crateSequenceToken) {
+      return;
+    }
+
+    if (index < 0) {
+      this.showStampByWord(word);
+      this.hideSelectedLetters();
+      this.clearSelection();
+      this.isProcessing = false;
+      return;
+    }
+
+    const sl = letters[index];
+    const crateWorld = crateNode.worldPosition.clone();
+    const dropPos = new Vec3(
+      crateWorld.x,
+      crateWorld.y + this.crateDropOffsetY,
+      crateWorld.z
+    );
+    const vanishScale = new Vec3(0.01, 0.01, sl.node.scale.z);
+
+    tween(sl.node)
+      .to(this.crateDropDuration, {
+        worldPosition: dropPos,
+        scale: vanishScale
+      }, { easing: 'quadIn' })
+      .call(() => {
+        if (token !== this.crateSequenceToken) {
+          return;
+        }
+
+        sl.node.active = false;
+        this.scheduleOnce(() => {
+          this.dropLettersIntoCrate(word, letters, crateNode, index - 1, token);
+        }, this.crateDropStagger);
+      })
+      .start();
   }
 
   /**
    * Слово собрано неправильно - вернуть буквы в стопки
    */
   private onWordError(): void {
+    if (this.isProcessing) {
+      return;
+    }
+
     this.isProcessing = true;
+    this.letterFlyToken++;
+    this.crateSequenceToken++;
+    this.isSelectFeedbackPlaying = false;
+    this.hideGlowEffect();
+
+    this.selectedLetters.forEach((sl: StackLetter) => {
+      Tween.stopAllByTarget(sl.node);
+    });
 
     this.showFailEffect();
 
@@ -535,6 +1086,8 @@ export class GameCore extends Component {
    */
   private returnLettersToStacks(): void {
     this.selectedLetters.forEach((sl: StackLetter) => {
+      Tween.stopAllByTarget(sl.node);
+
       // Вернуть в исходный родитель
       sl.node.setParent(sl.originalParent, true);
 
@@ -543,15 +1096,17 @@ export class GameCore extends Component {
         .to(this.animDuration, {
           worldPosition: sl.originalWorldPos,
           scale: sl.originalScale
-        })
+        }, { easing: 'sineInOut' })
         .call(() => {
           sl.node.position = sl.originalPos;
           sl.node.scale = sl.originalScale;
+          sl.node.setRotationFromEuler(0, 0, 0);
         })
         .start();
 
       // Снять пометку "взята"
       sl.taken = false;
+      sl.bankPlaced = false;
     });
   }
 
@@ -571,11 +1126,12 @@ export class GameCore extends Component {
       return;
     }
 
+    this.resetStampVisual(stamp);
     stamp.active = true;
 
-    const anim = stamp.getComponent(Animation);
+    const anim = this.getStampAnimation(stamp);
     if (anim) {
-      anim.play();
+      anim.play('SoldOutScale');
     }
 
     console.log(`   🏷️ Штамп "${stamp.name}" показан для слова "${word}"`);
@@ -589,20 +1145,26 @@ export class GameCore extends Component {
       return;
     }
 
+    this.unschedule(this.hideFailEffect);
+    this.resetFailVisual();
     this.failEffect.active = true;
 
-    const anim = this.failEffect.getComponent(Animation);
+    const anim = this.getFailAnimation();
     if (anim) {
-      anim.play();
+      anim.play('FailScale');
     }
 
-    this.scheduleOnce(() => {
-      if (this.failEffect) {
-        this.failEffect.active = false;
-      }
-    }, 1);
-
+    this.scheduleOnce(this.hideFailEffect, this.failEffectDuration);
     console.log('   💥 Эффект ошибки показан');
+  }
+
+  private hideFailEffect(): void {
+    if (!this.failEffect || !this.failEffect.isValid) {
+      return;
+    }
+
+    this.resetFailVisual();
+    this.failEffect.active = false;
   }
 
   /**
@@ -613,6 +1175,7 @@ export class GameCore extends Component {
     this.stampNodes.forEach((stamp: Node, index: number) => {
       if (stamp) {
         stamp.active = false;
+        this.resetStampVisual(stamp);
         // Определить какое слово соответствует этому штампу по имени
         const matchedWord = this.validWords.find(w => stamp.name.toUpperCase().includes(w));
         console.log(`  Штамп[${index}] "${stamp.name}" → слово "${matchedWord || '?'}"`);
@@ -620,10 +1183,33 @@ export class GameCore extends Component {
     });
   }
 
+  private getStampAnimation(stamp: Node): Animation | null {
+    return stamp.getComponent(Animation) ?? stamp.getComponentInChildren(Animation);
+  }
+
+  private getStampVisualNode(stamp: Node): Node | null {
+    const anim = this.getStampAnimation(stamp);
+    return anim ? anim.node : stamp;
+  }
+
+  private resetStampVisual(stamp: Node): void {
+    const visualNode = this.getStampVisualNode(stamp);
+    const anim = this.getStampAnimation(stamp);
+    if (!visualNode) {
+      return;
+    }
+
+    anim?.stop();
+    visualNode.setScale(0, 0, 1);
+  }
+
   /**
    * Очистить текущий выбор
    */
   private clearSelection(): void {
+    this.selectedLetters.forEach((sl: StackLetter) => {
+      sl.bankPlaced = false;
+    });
     this.selectedLetters = [];
     this.occupiedWordBankSlots.clear();
   }
