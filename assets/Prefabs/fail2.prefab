@@ -1,7 +1,7 @@
 [
   {
     "__type__": "cc.Prefab",
-    "_name": "Sold_Out",
+    "_name": "fail2",
     "_objFlags": 0,
     "__editorExtras__": {},
     "_native": "",
@@ -13,7 +13,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Sold_Out",
+    "_name": "fail2",
     "_objFlags": 0,
     "__editorExtras__": {},
     "_parent": null,
@@ -35,8 +35,8 @@
     },
     "_lpos": {
       "__type__": "cc.Vec3",
-      "x": 173,
-      "y": 310,
+      "x": 0,
+      "y": 0,
       "z": 0
     },
     "_lrot": {
@@ -76,8 +76,8 @@
     },
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 91,
-      "height": 34
+      "width": 200,
+      "height": 200
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -88,7 +88,7 @@
   },
   {
     "__type__": "cc.CompPrefabInfo",
-    "fileId": "a5yT+ARUdLBK4CPaRVGE5/"
+    "fileId": "edm0Gtv8xFUq+ryz7mmy9X"
   },
   {
     "__type__": "cc.Sprite",
@@ -113,7 +113,7 @@
       "a": 255
     },
     "_spriteFrame": {
-      "__uuid__": "3bf12d5b-1f50-4914-a5d4-4cff18a62db9@f9941",
+      "__uuid__": "edd44b72-ae41-4e9f-885f-c6ff445958e2@f9941",
       "__expectedType__": "cc.SpriteFrame"
     },
     "_type": 0,
@@ -133,7 +133,7 @@
   },
   {
     "__type__": "cc.CompPrefabInfo",
-    "fileId": "bb8JCrW5FEEY/JfBvw0SjE"
+    "fileId": "20iSful6ZO5YCiNn/XN4H4"
   },
   {
     "__type__": "cc.Animation",
@@ -150,19 +150,19 @@
     "playOnLoad": true,
     "_clips": [
       {
-        "__uuid__": "c9b73c94-f9b4-424d-b554-cf186339d8de",
+        "__uuid__": "0c953d18-ab5c-4887-831b-d281dfb0cd15",
         "__expectedType__": "cc.AnimationClip"
       }
     ],
     "_defaultClip": {
-      "__uuid__": "c9b73c94-f9b4-424d-b554-cf186339d8de",
+      "__uuid__": "0c953d18-ab5c-4887-831b-d281dfb0cd15",
       "__expectedType__": "cc.AnimationClip"
     },
     "_id": ""
   },
   {
     "__type__": "cc.CompPrefabInfo",
-    "fileId": "e7Ks4z7KJJo5Hu1uVtjrQh"
+    "fileId": "c3mZVZlfJAg6WRsX0++FwR"
   },
   {
     "__type__": "cc.PrefabInfo",
@@ -172,7 +172,8 @@
     "asset": {
       "__id__": 0
     },
-    "fileId": "d6a2XRqm5Or6nAFBSvLyR1",
+    "fileId": "f4CTQ4JsVJEb3ZWRhl2ID4",
+    "instance": null,
     "targetOverrides": null
   }
 ]

@@ -2,12 +2,12 @@
   "ver": "1.1.50",
   "importer": "prefab",
   "imported": true,
-  "uuid": "fd41d25a-33da-474d-a174-4af9cd2eb510",
+  "uuid": "40bc6839-db0f-4ca7-aa60-5d1df3abece8",
   "files": [
     ".json"
   ],
   "subMetas": {},
   "userData": {
-    "syncNodeName": "Sold_Out"
+    "syncNodeName": "fail2"
   }
 }
