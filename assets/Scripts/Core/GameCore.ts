@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find, UIOpacity, view } from 'cc';
+import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find, UIOpacity, view, Sprite } from 'cc';
 import { AudioCatalog } from '../Audio/audio-catalog';
 import { AudioController } from '../Audio/audio-controller';
 import plbx from '../plbx_html/plbx_html_playable';
@@ -54,6 +54,11 @@ export class GameCore extends Component {
   @property({ type: Node, tooltip: 'Glow-эффект выбора (VFX/GlowEffect/glow)' })
   glowEffect: Node = null;
 
+  @property({ type: Sprite, tooltip: 'Спрайт EffectGold (дочерняя нода Word_Bank/EffectGold)' })
+  effectGold: Sprite = null;
+
+  private effectGoldNode: Node | null = null;
+
   @property({ type: AudioCatalog, tooltip: 'Каталог звуков (audio-catalog)' })
   audioCatalog: AudioCatalog = null;
 
@@ -101,8 +106,8 @@ export class GameCore extends Component {
   @property({ type: CCFloat, tooltip: 'Легкий scale-пульс при выборе (1.04 = +4%)' })
   selectPulseScale: number = 1.04;
 
-  @property({ type: CCFloat, tooltip: 'Длительность fail effect (сек)' })
-  failEffectDuration: number = 0.42;
+  @property({ type: CCFloat, tooltip: 'Запасная длительность fail, если нет Animation (сек)' })
+  failEffectDuration: number = 1;
 
   @property({ type: CCFloat, tooltip: 'Подпрыг буквы в Word_Bank (px)' })
   bankSettleLiftY: number = 20;
@@ -212,12 +217,17 @@ export class GameCore extends Component {
     this.setupSystemInput();
   };
 
+  onLoad() {
+    this.setupEffectGold();
+  }
+
   start() {
     this.buildStacks();
     this.setupStamps();
     this.collectWordBankSlots();
     this.setupGlowEffect();
     this.setupFailEffect();
+    this.setupEffectGold();
     this.setupAudio();
     this.setupCtaScreen();
     this.setupGlobalInput();
@@ -276,6 +286,90 @@ export class GameCore extends Component {
 
     this.failEffect.active = false;
     this.resetFailVisual();
+  }
+
+  private resolveEffectGoldNode(): Node | null {
+    if (this.effectGoldNode?.isValid) {
+      return this.effectGoldNode;
+    }
+
+    const wordBank = this.wordBank ?? find('Canvas/WorldBank/Word_Bank');
+    let effectNode = wordBank?.getChildByName('EffectGold') ?? null;
+
+    if (!effectNode && wordBank) {
+      for (const child of wordBank.children) {
+        const nested = child.getChildByName('EffectGold');
+        if (nested) {
+          effectNode = nested;
+          break;
+        }
+      }
+    }
+
+    if (effectNode) {
+      this.effectGoldNode = effectNode;
+      if (!this.effectGold?.isValid) {
+        this.effectGold = effectNode.getComponent(Sprite);
+      }
+    }
+
+    return this.effectGoldNode;
+  }
+
+  private resolveEffectGoldSprite(): Sprite | null {
+    if (this.effectGold?.isValid && this.effectGold.node?.isValid) {
+      this.effectGoldNode = this.effectGold.node;
+      return this.effectGold;
+    }
+
+    const effectNode = this.resolveEffectGoldNode();
+    if (!effectNode) {
+      return null;
+    }
+
+    const sprite = effectNode.getComponent(Sprite);
+    if (sprite) {
+      this.effectGold = sprite;
+    }
+
+    return sprite;
+  }
+
+  private setupEffectGold(): void {
+    const effectNode = this.resolveEffectGoldNode();
+    if (!effectNode) {
+      console.warn('GameCore: EffectGold не найден (Word_Bank/EffectGold)');
+      return;
+    }
+
+    this.setEffectGoldVisible(false);
+  }
+
+  private showEffectGold(): void {
+    this.setEffectGoldVisible(true);
+  }
+
+  private hideEffectGold(): void {
+    this.setEffectGoldVisible(false);
+  }
+
+  private setEffectGoldVisible(visible: boolean): void {
+    const effectNode = this.resolveEffectGoldNode();
+    if (!effectNode) {
+      return;
+    }
+
+    effectNode.active = visible;
+
+    const sprite = this.resolveEffectGoldSprite();
+    if (sprite) {
+      sprite.enabled = visible;
+    }
+
+    const opacity = effectNode.getComponent(UIOpacity);
+    if (opacity) {
+      opacity.opacity = visible ? 255 : 0;
+    }
   }
 
   private resolveCtaScreen(): Node | null {
@@ -409,8 +503,26 @@ export class GameCore extends Component {
       return;
     }
 
+    anim?.off(Animation.EventType.FINISHED, this.hideFailEffect, this);
     anim?.stop();
-    visualNode.setScale(0, 0, 1);
+
+    const opacity = visualNode.getComponent(UIOpacity);
+    if (opacity) {
+      opacity.opacity = 0;
+    }
+  }
+
+  private playFailAnimation(): void {
+    const anim = this.getFailAnimation();
+    if (!anim) {
+      this.scheduleOnce(this.hideFailEffect, this.failEffectDuration);
+      return;
+    }
+
+    const clipName = anim.defaultClip?.name ?? 'FailScale';
+    anim.off(Animation.EventType.FINISHED, this.hideFailEffect, this);
+    anim.once(Animation.EventType.FINISHED, this.hideFailEffect, this);
+    anim.play(clipName);
   }
 
   /**
@@ -847,6 +959,8 @@ export class GameCore extends Component {
           return;
         }
 
+        this.audioController?.playWordBankItemDrop();
+
         if (slotNode && slotNode.isValid) {
           // После прилета фиксируем букву в центре слота
           sl.node.setParent(slotNode, true);
@@ -1041,6 +1155,8 @@ export class GameCore extends Component {
       return;
     }
 
+    this.showEffectGold();
+
     this.scheduleOnce(() => {
       this.playWordBounce(letters, () => {
         this.scheduleOnce(() => {
@@ -1117,6 +1233,8 @@ export class GameCore extends Component {
   }
 
   private prepareLettersForCrateFlight(letters: StackLetter[]): void {
+    this.hideEffectGold();
+
     const flightLayer = this.getLettersFlightLayer();
 
     letters.forEach((sl: StackLetter, index: number) => {
@@ -1180,6 +1298,8 @@ export class GameCore extends Component {
     const flyScale = new Vec3(hoverScale, hoverScale, 1);
     let completedFlies = 0;
 
+    this.audioController?.playItemDropLoop();
+
     letters.forEach((sl: StackLetter, index: number) => {
       const targetPos = new Vec3(
         crateWorld.x,
@@ -1189,6 +1309,7 @@ export class GameCore extends Component {
 
       this.scheduleOnce(() => {
         if (token !== this.crateSequenceToken) {
+          this.audioController?.stopItemDropLoop();
           return;
         }
 
@@ -1200,11 +1321,13 @@ export class GameCore extends Component {
           }, { easing: 'cubicOut' })
           .call(() => {
             if (token !== this.crateSequenceToken) {
+              this.audioController?.stopItemDropLoop();
               return;
             }
 
             completedFlies++;
             if (completedFlies >= letters.length) {
+              this.audioController?.stopItemDropLoop();
               this.scheduleOnce(() => {
                 if (token !== this.crateSequenceToken) {
                   return;
@@ -1271,6 +1394,10 @@ export class GameCore extends Component {
       return;
     }
 
+    if (index === letters.length - 1) {
+      this.audioController?.playDropCreatRepeated(5);
+    }
+
     const sl = letters[index];
     const crateWorld = crateNode.worldPosition.clone();
     const dropPos = new Vec3(
@@ -1311,6 +1438,8 @@ export class GameCore extends Component {
     this.crateSequenceToken++;
     this.isSelectFeedbackPlaying = false;
     this.hideGlowEffect();
+    this.hideEffectGold();
+    this.audioController?.stopItemDropLoop();
 
     this.selectedLetters.forEach((sl: StackLetter) => {
       Tween.stopAllByTarget(sl.node);
@@ -1413,6 +1542,7 @@ export class GameCore extends Component {
 
     this.resetStampVisual(stamp);
     stamp.active = true;
+    this.audioController?.playSoldOut();
 
     const anim = this.getStampAnimation(stamp);
     if (anim) {
@@ -1433,13 +1563,9 @@ export class GameCore extends Component {
     this.unschedule(this.hideFailEffect);
     this.resetFailVisual();
     this.failEffect.active = true;
+    this.audioController?.playFailWrong();
+    this.playFailAnimation();
 
-    const anim = this.getFailAnimation();
-    if (anim) {
-      anim.play('FailScale');
-    }
-
-    this.scheduleOnce(this.hideFailEffect, this.failEffectDuration);
     console.log('   💥 Эффект ошибки показан');
   }
 

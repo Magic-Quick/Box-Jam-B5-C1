@@ -58,6 +58,41 @@ export class AudioController {
         this.playSound('readyWord');
     }
 
+    public playWordBankItemDrop(): void {
+        this.playSound('itemDrop');
+    }
+
+    public playItemDropLoop(): void {
+        this.playLoop('itemDrop', this.catalog.itemDropCrateVolume);
+    }
+
+    public stopItemDropLoop(): void {
+        this.stopSound('itemDrop');
+    }
+
+    public playFailWrong(): void {
+        this.playSound('wrong');
+    }
+
+    public playDropCreatRepeated(repeatCount: number = 5): void {
+        const clip = this.catalog.getSoundByType('dropCreat');
+        if (!clip) {
+            return;
+        }
+
+        const intervalSec = Math.max(0.05, clip.getDuration() * 0.9);
+        const volume = this.catalog.dropCreatVolume;
+        for (let i = 0; i < repeatCount; i++) {
+            setTimeout(() => {
+                this.playSound('dropCreat', volume);
+            }, i * intervalSec * 1000);
+        }
+    }
+
+    public playSoldOut(): void {
+        this.playSound('soldOut');
+    }
+
     public stopBackgroundMusic(): void {
         this.musicMutedForCta = true;
 
@@ -85,7 +120,7 @@ export class AudioController {
         if (musicClip && this.musicAudioSource) {
             this.musicAudioSource.clip = musicClip;
             this.musicAudioSource.loop = true;
-            this.musicAudioSource.volume = 0.4;
+            this.musicAudioSource.volume = 0.3;
             this.musicAudioSource.play();
         }
     }
@@ -117,6 +152,10 @@ export class AudioController {
     public playSoundLoop(soundType: string): void {
         if (!this.audioEnabled) return;
 
+        this.playLoop(soundType);
+    }
+
+    private playLoop(soundType: string, volumeScale: number = 1): void {
         const audioClip = this.catalog.getSoundByType(soundType);
         if (!audioClip) return;
 
@@ -134,7 +173,7 @@ export class AudioController {
         audioSource.clip = audioClip;
         audioSource.loop = true;
         audioSource.playOnAwake = false;
-        audioSource.volume = 1.0;
+        audioSource.volume = volumeScale;
 
         this.loopAudioSources.set(soundType, audioSource);
         audioSource.play();
