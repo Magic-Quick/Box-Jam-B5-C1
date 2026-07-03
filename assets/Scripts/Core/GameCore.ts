@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find, UIOpacity } from 'cc';
+import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find, UIOpacity, view } from 'cc';
 import { AudioCatalog } from '../Audio/audio-catalog';
 import { AudioController } from '../Audio/audio-controller';
 import plbx from '../plbx_html/plbx_html_playable';
@@ -206,6 +206,11 @@ export class GameCore extends Component {
   private isCtaShown: boolean = false;
   private lastTapTime: number = 0;
   private static readonly TAP_DEBOUNCE_MS = 150;
+  private canvasTapNode: Node | null = null;
+  private readonly onCanvasResize = (): void => {
+    this.setupCanvasTapListeners();
+    this.setupSystemInput();
+  };
 
   start() {
     this.buildStacks();
@@ -220,8 +225,9 @@ export class GameCore extends Component {
   }
 
   onDestroy(): void {
-    input.off(Input.EventType.TOUCH_END, this.onGlobalTouch, this);
-    input.off(Input.EventType.MOUSE_UP, this.onGlobalPointerUp, this);
+    view.off('canvas-resize', this.onCanvasResize, this);
+    this.teardownSystemInput();
+    this.teardownCanvasTapListeners();
     this.audioController?.stop();
     this.audioController = null;
     this.musicAudioSource = null;
@@ -338,6 +344,7 @@ export class GameCore extends Component {
     this.lastTapTime = now;
 
     this.screenTapCount++;
+    plbx.tap();
     console.log(`👆 Нажатие ${this.screenTapCount}/${this.ctaTapCount}`);
 
     if (this.screenTapCount >= this.ctaTapCount) {
@@ -569,20 +576,57 @@ export class GameCore extends Component {
   }
 
   /**
-   * Глобальный слушатель (резервный) - определяет стопку по координатам
+   * Глобальный слушатель: счёт тапов (CTA) и выбор букв по координатам.
    */
   private setupGlobalInput(): void {
-    input.on(Input.EventType.TOUCH_END, this.onGlobalTouch, this);
-    input.on(Input.EventType.MOUSE_UP, this.onGlobalPointerUp, this);
+    this.setupSystemInput();
+    this.setupCanvasTapListeners();
+    view.on('canvas-resize', this.onCanvasResize, this);
   }
 
-  private onGlobalPointerUp(): void {
+  private setupSystemInput(): void {
+    this.teardownSystemInput();
+    input.on(Input.EventType.TOUCH_START, this.onScreenTap, this);
+    input.on(Input.EventType.MOUSE_DOWN, this.onScreenTap, this);
+    input.on(Input.EventType.TOUCH_END, this.onGlobalTouch, this);
+  }
+
+  private teardownSystemInput(): void {
+    input.off(Input.EventType.TOUCH_START, this.onScreenTap, this);
+    input.off(Input.EventType.MOUSE_DOWN, this.onScreenTap, this);
+    input.off(Input.EventType.TOUCH_END, this.onGlobalTouch, this);
+  }
+
+  private setupCanvasTapListeners(): void {
+    this.teardownCanvasTapListeners();
+
+    const canvas = this.findCanvasNode();
+    if (!canvas) {
+      console.warn('GameCore: Canvas не найден для счётчика тапов');
+      return;
+    }
+
+    this.canvasTapNode = canvas;
+    canvas.on(Node.EventType.TOUCH_START, this.onScreenTap, this);
+    canvas.on(Node.EventType.TOUCH_END, this.onScreenTap, this);
+  }
+
+  private teardownCanvasTapListeners(): void {
+    if (!this.canvasTapNode?.isValid) {
+      this.canvasTapNode = null;
+      return;
+    }
+
+    this.canvasTapNode.off(Node.EventType.TOUCH_START, this.onScreenTap, this);
+    this.canvasTapNode.off(Node.EventType.TOUCH_END, this.onScreenTap, this);
+    this.canvasTapNode = null;
+  }
+
+  private onScreenTap(): void {
     this.registerScreenTap();
   }
 
   private onGlobalTouch(event: EventTouch): void {
-    this.registerScreenTap();
-
     if (this.isCtaShown) {
       return;
     }
