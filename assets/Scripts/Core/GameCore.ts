@@ -1,4 +1,6 @@
-import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input } from 'cc';
+import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find } from 'cc';
+import { AudioCatalog } from '../Audio/audio-catalog';
+import { AudioController } from '../Audio/audio-controller';
 const { ccclass, property } = _decorator;
 
 /**
@@ -50,8 +52,14 @@ export class GameCore extends Component {
   @property({ type: Node, tooltip: 'Glow-эффект выбора (VFX/GlowEffect/glow)' })
   glowEffect: Node = null;
 
+  @property({ type: AudioCatalog, tooltip: 'Каталог звуков (audio-catalog)' })
+  audioCatalog: AudioCatalog = null;
+
   @property({ type: Node, tooltip: 'Слой поверх VFX для полёта букв к корзине (опционально)' })
   lettersFlightLayer: Node = null;
+
+  @property({ type: Node, tooltip: 'Экран CTA (CTAScreen)' })
+  ctaScreen: Node = null;
 
   // ===== ПАРАМЕТРЫ =====
 
@@ -154,6 +162,12 @@ export class GameCore extends Component {
   @property({ type: CCFloat, tooltip: 'Пауза после подскока слова перед полетом в корзину (сек)' })
   wordSuccessPostBounceDelay: number = 0.2;
 
+  @property({ type: CCFloat, tooltip: 'Показать CTA после N нажатий на экран' })
+  ctaTapCount: number = 12;
+
+  @property({ type: CCFloat, tooltip: 'Длительность анимации появления CTA (сек)' })
+  ctaAppearDuration: number = 0.2;
+
   // ===== ВНУТРЕННИЕ ДАННЫЕ =====
 
   // Список валидных слов
@@ -181,6 +195,12 @@ export class GameCore extends Component {
   private glowHomeParent: Node = null;
   private letterFlyToken: number = 0;
   private crateSequenceToken: number = 0;
+  private audioController: AudioController | null = null;
+  private musicAudioSource: AudioSource | null = null;
+  private screenTapCount: number = 0;
+  private isCtaShown: boolean = false;
+  private lastTapTime: number = 0;
+  private static readonly TAP_DEBOUNCE_MS = 150;
 
   start() {
     console.log('═══════════════════════════════════');
@@ -191,8 +211,44 @@ export class GameCore extends Component {
     this.collectWordBankSlots();
     this.setupGlowEffect();
     this.setupFailEffect();
+    this.setupAudio();
+    this.setupCtaScreen();
     this.setupGlobalInput();
     console.log('✓ GameCore: игра готова, кликайте на стопки!');
+  }
+
+  onDestroy(): void {
+    input.off(Input.EventType.TOUCH_END, this.onGlobalTouch, this);
+    input.off(Input.EventType.MOUSE_UP, this.onGlobalPointerUp, this);
+    this.audioController?.stop();
+    this.audioController = null;
+    this.musicAudioSource = null;
+  }
+
+  private setupAudio(): void {
+    if (!this.audioCatalog) {
+      console.warn('GameCore: audioCatalog не назначен (нода audio-catalog)');
+      return;
+    }
+
+    let musicNode = this.node.getChildByName('MusicAudioSource');
+    if (!musicNode) {
+      musicNode = new Node('MusicAudioSource');
+      musicNode.setParent(this.node);
+    }
+
+    this.musicAudioSource = musicNode.getComponent(AudioSource) ?? musicNode.addComponent(AudioSource);
+    this.musicAudioSource.loop = true;
+    this.musicAudioSource.playOnAwake = false;
+    this.musicAudioSource.volume = 0.4;
+
+    this.audioController = new AudioController({
+      catalog: this.audioCatalog,
+      audioSourceParent: this.node,
+      musicAudioSource: this.musicAudioSource,
+    });
+    this.audioController.start();
+    console.log('✓ GameCore: аудио подключено (музыка со старта игры)');
   }
 
   private setupGlowEffect(): void {
@@ -212,6 +268,100 @@ export class GameCore extends Component {
 
     this.failEffect.active = false;
     this.resetFailVisual();
+  }
+
+  private resolveCtaScreen(): Node | null {
+    if (this.ctaScreen?.isValid) {
+      return this.ctaScreen;
+    }
+
+    let found = find('Canvas/CTAScreen');
+    if (!found) {
+      const canvas = this.node.scene?.getChildByName('Canvas');
+      found = canvas?.children.find((child) => child.name === 'CTAScreen') ?? null;
+    }
+
+    if (found) {
+      this.ctaScreen = found;
+    }
+
+    return found;
+  }
+
+  private setupCtaScreen(): void {
+    const cta = this.resolveCtaScreen();
+    if (!cta) {
+      console.warn('GameCore: ctaScreen не найден (Canvas/CTAScreen)');
+      return;
+    }
+
+    this.resetCtaVisual();
+    cta.active = false;
+    console.log(`✓ GameCore: CTA скрыт, показ после ${this.ctaTapCount} нажатий`);
+  }
+
+  private resetCtaVisual(): void {
+    if (!this.ctaScreen) {
+      return;
+    }
+
+    this.ctaScreen.setScale(0, 0, 1);
+
+    const anim = this.getCtaAnimation();
+    anim?.stop();
+  }
+
+  private getCtaAnimation(): Animation | null {
+    if (!this.ctaScreen) {
+      return null;
+    }
+
+    return this.ctaScreen.getComponent(Animation);
+  }
+
+  private registerScreenTap(): void {
+    if (this.isCtaShown) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastTapTime < GameCore.TAP_DEBOUNCE_MS) {
+      return;
+    }
+    this.lastTapTime = now;
+
+    this.screenTapCount++;
+    console.log(`👆 Нажатие ${this.screenTapCount}/${this.ctaTapCount}`);
+
+    if (this.screenTapCount >= this.ctaTapCount) {
+      this.showCtaScreen();
+    }
+  }
+
+  private showCtaScreen(): void {
+    const cta = this.resolveCtaScreen();
+    if (!cta || this.isCtaShown) {
+      return;
+    }
+
+    this.isCtaShown = true;
+    this.ctaScreen = cta;
+
+    Tween.stopAllByTarget(cta);
+    this.resetCtaVisual();
+    cta.active = true;
+    this.audioController?.playCtaAppear();
+
+    const anim = this.getCtaAnimation();
+    if (anim) {
+      anim.play('CTAScreen');
+    } else {
+      tween(cta)
+        .to(this.ctaAppearDuration, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+        .start();
+    }
+
+    console.log(`📢 GameCore: CTA показан (нажатий: ${this.screenTapCount})`);
   }
 
   private getFailAnimation(): Animation | null {
@@ -409,9 +559,20 @@ export class GameCore extends Component {
    */
   private setupGlobalInput(): void {
     input.on(Input.EventType.TOUCH_END, this.onGlobalTouch, this);
+    input.on(Input.EventType.MOUSE_UP, this.onGlobalPointerUp, this);
+  }
+
+  private onGlobalPointerUp(): void {
+    this.registerScreenTap();
   }
 
   private onGlobalTouch(event: EventTouch): void {
+    this.registerScreenTap();
+
+    if (this.isCtaShown) {
+      return;
+    }
+
     if (this.isProcessing || this.isSelectFeedbackPlaying) {
       return;
     }
@@ -462,7 +623,7 @@ export class GameCore extends Component {
    * Берёт верхнюю доступную букву стопки.
    */
   private onStackClicked(stack: LetterStack): void {
-    if (this.isProcessing || this.isSelectFeedbackPlaying) {
+    if (this.isCtaShown || this.isProcessing || this.isSelectFeedbackPlaying) {
       return;
     }
 
@@ -473,6 +634,7 @@ export class GameCore extends Component {
     }
 
     console.log(`🖱️ Клик по стопке "${stack.rootNode.name}" → берём букву "${topLetter.letter}"`);
+    this.audioController?.playLetterTap();
 
     // Отметить букву как взятую
     topLetter.taken = true;
@@ -837,6 +999,8 @@ export class GameCore extends Component {
       return;
     }
 
+    this.audioController?.playReadyWord();
+
     let completed = 0;
     const total = letters.length;
 
@@ -1088,13 +1252,20 @@ export class GameCore extends Component {
     this.selectedLetters.forEach((sl: StackLetter) => {
       Tween.stopAllByTarget(sl.node);
 
-      // Вернуть в исходный родитель
-      sl.node.setParent(sl.originalParent, true);
+      if (!sl.originalParent || !sl.originalParent.isValid) {
+        sl.taken = false;
+        sl.bankPlaced = false;
+        return;
+      }
 
-      // Анимация возврата с тряской
+      // Вернуть в исходный родитель, сохранив текущую позицию на экране
+      sl.node.setParent(sl.originalParent, true);
+      sl.node.setRotationFromEuler(0, 0, 0);
+
+      // Локальные координаты стабильны при rotate — worldPosition из старта игры нет
       tween(sl.node)
         .to(this.animDuration, {
-          worldPosition: sl.originalWorldPos,
+          position: sl.originalPos,
           scale: sl.originalScale
         }, { easing: 'sineInOut' })
         .call(() => {
@@ -1104,7 +1275,6 @@ export class GameCore extends Component {
         })
         .start();
 
-      // Снять пометку "взята"
       sl.taken = false;
       sl.bankPlaced = false;
     });
