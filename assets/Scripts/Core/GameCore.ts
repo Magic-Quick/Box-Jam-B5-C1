@@ -1,6 +1,7 @@
-import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find } from 'cc';
+import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find, UIOpacity } from 'cc';
 import { AudioCatalog } from '../Audio/audio-catalog';
 import { AudioController } from '../Audio/audio-controller';
+import plbx from '../plbx_html/plbx_html_playable';
 const { ccclass, property } = _decorator;
 
 /**
@@ -14,6 +15,7 @@ interface StackLetter {
   originalPos: Vec3;   // исходная локальная позиция
   originalWorldPos: Vec3; // исходная мировая позиция
   originalScale: Vec3; // исходный масштаб
+  originalSiblingIndex: number; // порядок отрисовки в стопке
   taken: boolean;      // взята ли буква
   bankPlaced: boolean; // буква полностью размещена в Word_Bank (полёт + settle)
 }
@@ -144,8 +146,11 @@ export class GameCore extends Component {
   @property({ type: CCFloat, tooltip: 'Смещение падения внутрь корзины (px, отрицательное = вниз)' })
   crateDropOffsetY: number = -18;
 
-  @property({ type: CCFloat, tooltip: 'Масштаб буквы при полете к корзине (от текущего)' })
-  crateFlyScale: number = 0.92;
+  @property({ type: CCFloat, tooltip: 'Масштаб буквы над корзиной перед падением (абсолютный)' })
+  crateFlyScale: number = 0.5;
+
+  @property({ type: CCFloat, tooltip: 'Доп. сжатие стопки для длинных слов (6+ букв)' })
+  crateLongWordScaleFactor: number = 0.82;
 
   @property({ type: CCFloat, tooltip: 'Пауза после settle последней буквы перед подскоком слова (сек)' })
   wordSuccessPreDelay: number = 0.1;
@@ -203,9 +208,6 @@ export class GameCore extends Component {
   private static readonly TAP_DEBOUNCE_MS = 150;
 
   start() {
-    console.log('═══════════════════════════════════');
-    console.log('🎮 GameCore: запуск игры (режим стопок)');
-    console.log('═══════════════════════════════════');
     this.buildStacks();
     this.setupStamps();
     this.collectWordBankSlots();
@@ -214,7 +216,7 @@ export class GameCore extends Component {
     this.setupAudio();
     this.setupCtaScreen();
     this.setupGlobalInput();
-    console.log('✓ GameCore: игра готова, кликайте на стопки!');
+    plbx.game_ready();
   }
 
   onDestroy(): void {
@@ -305,7 +307,12 @@ export class GameCore extends Component {
       return;
     }
 
-    this.ctaScreen.setScale(0, 0, 1);
+    this.ctaScreen.setScale(1, 1, 1);
+
+    const opacity = this.ctaScreen.getComponent(UIOpacity);
+    if (opacity) {
+      opacity.opacity = 0;
+    }
 
     const anim = this.getCtaAnimation();
     anim?.stop();
@@ -345,6 +352,7 @@ export class GameCore extends Component {
     }
 
     this.isCtaShown = true;
+    plbx.game_end();
     this.ctaScreen = cta;
 
     Tween.stopAllByTarget(cta);
@@ -353,8 +361,13 @@ export class GameCore extends Component {
     this.audioController?.playCtaAppear();
 
     const anim = this.getCtaAnimation();
+    const opacity = cta.getComponent(UIOpacity);
     if (anim) {
       anim.play('CTAScreen');
+    } else if (opacity) {
+      tween(opacity)
+        .to(this.ctaAppearDuration, { opacity: 255 })
+        .start();
     } else {
       tween(cta)
         .to(this.ctaAppearDuration, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
@@ -502,6 +515,7 @@ export class GameCore extends Component {
       originalPos: node.position.clone(),
       originalWorldPos: node.worldPosition.clone(),
       originalScale: node.scale.clone(),
+      originalSiblingIndex: node.getSiblingIndex(),
       taken: false,
       bankPlaced: false
     };
@@ -1118,18 +1132,15 @@ export class GameCore extends Component {
   private playWordSuccessCrateSequence(word: string, letters: StackLetter[], crateNode: Node): void {
     const token = ++this.crateSequenceToken;
     const crateWorld = crateNode.worldPosition.clone();
+    const hoverScale = this.getCrateHoverScale(letters.length);
+    const flyScale = new Vec3(hoverScale, hoverScale, 1);
     let completedFlies = 0;
 
     letters.forEach((sl: StackLetter, index: number) => {
       const targetPos = new Vec3(
         crateWorld.x,
-        crateWorld.y + this.crateHoverOffsetY + index * this.crateStackOffsetY,
+        this.getCrateHoverWorldY(crateWorld.y, index, letters.length),
         crateWorld.z
-      );
-      const flyScale = new Vec3(
-        sl.node.scale.x * this.crateFlyScale,
-        sl.node.scale.y * this.crateFlyScale,
-        sl.node.scale.z
       );
 
       this.scheduleOnce(() => {
@@ -1161,6 +1172,40 @@ export class GameCore extends Component {
           .start();
       }, index * this.crateFlyStagger);
     });
+  }
+
+  private getCrateHoverScale(letterCount: number): number {
+    let scale = this.crateFlyScale;
+
+    if (letterCount > 10) {
+      scale *= this.crateLongWordScaleFactor * 0.75;
+    } else if (letterCount > 8) {
+      scale *= this.crateLongWordScaleFactor * 0.85;
+    } else if (letterCount > 6) {
+      scale *= this.crateLongWordScaleFactor;
+    } else if (letterCount > 5) {
+      scale *= 0.92;
+    }
+
+    return Math.max(0.2, scale);
+  }
+
+  private getCrateHoverWorldY(crateWorldY: number, index: number, letterCount: number): number {
+    let baseOffset = this.crateHoverOffsetY;
+    let stackStep = this.crateStackOffsetY;
+
+    if (letterCount > 8) {
+      baseOffset *= 0.7;
+      stackStep *= 0.55;
+    } else if (letterCount > 6) {
+      baseOffset *= 0.82;
+      stackStep *= 0.7;
+    } else if (letterCount > 5) {
+      baseOffset *= 0.9;
+      stackStep *= 0.85;
+    }
+
+    return crateWorldY + baseOffset + index * stackStep;
   }
 
   private dropLettersIntoCrate(
@@ -1249,6 +1294,9 @@ export class GameCore extends Component {
    * Вернуть выбранные буквы обратно в стопки (при ошибке)
    */
   private returnLettersToStacks(): void {
+    const flightLayer = this.getLettersFlightLayer();
+    this.bringLettersFlightLayerToFront();
+
     this.selectedLetters.forEach((sl: StackLetter) => {
       Tween.stopAllByTarget(sl.node);
 
@@ -1258,26 +1306,49 @@ export class GameCore extends Component {
         return;
       }
 
-      // Вернуть в исходный родитель, сохранив текущую позицию на экране
-      sl.node.setParent(sl.originalParent, true);
+      const startWorldPos = sl.node.worldPosition.clone();
+      const startWorldScale = sl.node.worldScale.clone();
+      const targetWorldPos = this.getLetterStackWorldPos(sl);
+
+      sl.node.setParent(flightLayer, true);
+      sl.node.worldPosition = startWorldPos;
+      sl.node.worldScale = startWorldScale;
       sl.node.setRotationFromEuler(0, 0, 0);
 
-      // Локальные координаты стабильны при rotate — worldPosition из старта игры нет
       tween(sl.node)
         .to(this.animDuration, {
-          position: sl.originalPos,
-          scale: sl.originalScale
+          worldPosition: targetWorldPos,
         }, { easing: 'sineInOut' })
         .call(() => {
+          sl.node.setParent(sl.originalParent, true);
           sl.node.position = sl.originalPos;
           sl.node.scale = sl.originalScale;
           sl.node.setRotationFromEuler(0, 0, 0);
+          sl.node.setSiblingIndex(this.getLetterReturnSiblingIndex(sl));
         })
         .start();
 
       sl.taken = false;
       sl.bankPlaced = false;
     });
+  }
+
+  private getLetterStackWorldPos(sl: StackLetter): Vec3 {
+    const parentUI = sl.originalParent.getComponent(UITransform);
+    if (parentUI) {
+      return parentUI.convertToWorldSpaceAR(sl.originalPos);
+    }
+
+    return sl.originalWorldPos.clone();
+  }
+
+  private getLetterReturnSiblingIndex(sl: StackLetter): number {
+    const parent = sl.originalParent;
+    if (!parent?.isValid) {
+      return sl.originalSiblingIndex;
+    }
+
+    return Math.min(sl.originalSiblingIndex, Math.max(0, parent.children.length));
   }
 
   /**

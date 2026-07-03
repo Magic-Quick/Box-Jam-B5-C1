@@ -1,4 +1,5 @@
 import { _decorator, Component, Node, sys } from 'cc';
+import plbx from '../plbx_html/plbx_html_playable';
 
 const { ccclass, property } = _decorator;
 
@@ -27,6 +28,8 @@ export class StoreLinkButton extends Component {
       console.warn('StoreLinkButton: ссылка для текущей платформы не задана');
       return;
     }
+
+    plbx.download();
 
     sys.openURL(url);
   }
