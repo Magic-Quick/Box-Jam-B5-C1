@@ -256,9 +256,7 @@ export class GameCore extends Component {
     }
 
     this.musicAudioSource = musicNode.getComponent(AudioSource) ?? musicNode.addComponent(AudioSource);
-    this.musicAudioSource.loop = true;
     this.musicAudioSource.playOnAwake = false;
-    this.musicAudioSource.volume = 0.4;
 
     this.audioController = new AudioController({
       catalog: this.audioCatalog,
@@ -949,6 +947,8 @@ export class GameCore extends Component {
     }
 
     Tween.stopAllByTarget(sl.node);
+    this.audioController?.playWordBankItemDrop();
+
     tween(sl.node)
       .to(this.animDuration, {
         worldPosition: targetWorldPos,
@@ -958,8 +958,6 @@ export class GameCore extends Component {
         if (flyToken !== this.letterFlyToken || !sl.node.isValid) {
           return;
         }
-
-        this.audioController?.playWordBankItemDrop();
 
         if (slotNode && slotNode.isValid) {
           // После прилета фиксируем букву в центре слота
@@ -1298,7 +1296,7 @@ export class GameCore extends Component {
     const flyScale = new Vec3(hoverScale, hoverScale, 1);
     let completedFlies = 0;
 
-    this.audioController?.playItemDropLoop();
+    this.audioController?.playCrateFlightWoosh();
 
     letters.forEach((sl: StackLetter, index: number) => {
       const targetPos = new Vec3(
@@ -1309,7 +1307,6 @@ export class GameCore extends Component {
 
       this.scheduleOnce(() => {
         if (token !== this.crateSequenceToken) {
-          this.audioController?.stopItemDropLoop();
           return;
         }
 
@@ -1321,17 +1318,16 @@ export class GameCore extends Component {
           }, { easing: 'cubicOut' })
           .call(() => {
             if (token !== this.crateSequenceToken) {
-              this.audioController?.stopItemDropLoop();
               return;
             }
 
             completedFlies++;
             if (completedFlies >= letters.length) {
-              this.audioController?.stopItemDropLoop();
               this.scheduleOnce(() => {
                 if (token !== this.crateSequenceToken) {
                   return;
                 }
+                this.placeLettersInsideCrate(crateNode, letters);
                 this.dropLettersIntoCrate(word, letters, crateNode, letters.length - 1, token);
               }, this.crateHoverHoldDuration);
             }
@@ -1375,6 +1371,54 @@ export class GameCore extends Component {
     return crateWorldY + baseOffset + index * stackStep;
   }
 
+  private findCrateFruitBg(crateNode: Node): Node | null {
+    for (const child of crateNode.children) {
+      if (child.name.startsWith('Fruit_BG')) {
+        return child;
+      }
+    }
+
+    return crateNode.children.find((child) => child.name.toLowerCase().includes('fruit')) ?? null;
+  }
+
+  private placeLettersInsideCrate(crateNode: Node, letters: StackLetter[]): void {
+    const fruitBg = this.findCrateFruitBg(crateNode);
+
+    letters.forEach((sl: StackLetter) => {
+      if (!sl.node.isValid) {
+        return;
+      }
+
+      Tween.stopAllByTarget(sl.node);
+      const worldPos = sl.node.worldPosition.clone();
+      const worldScale = sl.node.worldScale.clone();
+      sl.node.setParent(crateNode, true);
+      sl.node.worldPosition = worldPos;
+      sl.node.worldScale = worldScale;
+    });
+
+    letters.forEach((sl: StackLetter, index: number) => {
+      if (sl.node.isValid) {
+        sl.node.setSiblingIndex(index);
+      }
+    });
+
+    if (!fruitBg?.isValid) {
+      return;
+    }
+
+    fruitBg.setSiblingIndex(letters.length);
+
+    let nextIndex = letters.length + 1;
+    for (const child of crateNode.children) {
+      if (child === fruitBg || letters.some((sl) => sl.node === child)) {
+        continue;
+      }
+
+      child.setSiblingIndex(nextIndex++);
+    }
+  }
+
   private dropLettersIntoCrate(
     word: string,
     letters: StackLetter[],
@@ -1394,10 +1438,6 @@ export class GameCore extends Component {
       return;
     }
 
-    if (index === letters.length - 1) {
-      this.audioController?.playDropCreatRepeated(5);
-    }
-
     const sl = letters[index];
     const crateWorld = crateNode.worldPosition.clone();
     const dropPos = new Vec3(
@@ -1405,18 +1445,17 @@ export class GameCore extends Component {
       crateWorld.y + this.crateDropOffsetY,
       crateWorld.z
     );
-    const vanishScale = new Vec3(0.01, 0.01, sl.node.scale.z);
 
     tween(sl.node)
       .to(this.crateDropDuration, {
         worldPosition: dropPos,
-        scale: vanishScale
       }, { easing: 'quadIn' })
       .call(() => {
         if (token !== this.crateSequenceToken) {
           return;
         }
 
+        this.audioController?.playDropCreat();
         sl.node.active = false;
         this.scheduleOnce(() => {
           this.dropLettersIntoCrate(word, letters, crateNode, index - 1, token);

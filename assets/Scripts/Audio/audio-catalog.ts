@@ -22,8 +22,11 @@ export class AudioCatalog extends Component {
     @property({ type: AudioClip, tooltip: 'Звук при размещении буквы в Word_Bank (item_drop)' })
     public itemDrop: AudioClip | null = null;
 
-    @property({ tooltip: 'Громкость item_drop при полёте слова в корзину (1 = стандартная)' })
-    public itemDropCrateVolume: number = 1.35;
+    @property({ tooltip: 'Громкость woosh при полёте слова в корзину (1 = стандартная)' })
+    public wooshVolume: number = 1.55;
+
+    @property({ type: AudioClip, tooltip: 'Звук полёта слова в корзину (woosh)' })
+    public woosh: AudioClip | null = null;
 
     @property({ type: AudioClip, tooltip: 'Звук появления fail-эффекта (wrong)' })
     public wrong: AudioClip | null = null;
@@ -37,12 +40,16 @@ export class AudioCatalog extends Component {
     @property({ type: AudioClip, tooltip: 'Звук появления SOLD OUT (soldoutaudio)' })
     public soldOutAudio: AudioClip | null = null;
 
+    @property({ tooltip: 'Громкость soldoutaudio (1 = стандартная)' })
+    public soldOutVolume: number = 0.75;
+
     public getSoundByType(soundType: string): AudioClip | null {
         switch (soundType) {
             case 'tap': return this.tap;
             case 'cta': return this.cta;
             case 'readyWord': return this.readyWord;
             case 'itemDrop': return this.itemDrop;
+            case 'woosh': return this.woosh;
             case 'wrong': return this.wrong;
             case 'dropCreat': return this.dropCreat;
             case 'soldOut': return this.soldOutAudio;

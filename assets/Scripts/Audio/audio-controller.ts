@@ -18,6 +18,7 @@ export class AudioController {
         this.catalog = params.catalog;
         this.audioSourceParent = params.audioSourceParent;
         this.musicAudioSource = params.musicAudioSource;
+        this.setupBackgroundMusicLoop();
     }
 
     public start(): void {
@@ -25,6 +26,8 @@ export class AudioController {
     }
 
     public stop(): void {
+        this.musicAudioSource?.node.off(AudioSource.EventType.ENDED, this.restartBackgroundMusic, this);
+
         if (this.musicAudioSource) {
             this.musicAudioSource.stop();
         }
@@ -63,7 +66,11 @@ export class AudioController {
     }
 
     public playItemDropLoop(): void {
-        this.playLoop('itemDrop', this.catalog.itemDropCrateVolume);
+        this.playLoop('itemDrop');
+    }
+
+    public playCrateFlightWoosh(): void {
+        this.playSound('woosh', this.catalog.wooshVolume);
     }
 
     public stopItemDropLoop(): void {
@@ -74,23 +81,12 @@ export class AudioController {
         this.playSound('wrong');
     }
 
-    public playDropCreatRepeated(repeatCount: number = 5): void {
-        const clip = this.catalog.getSoundByType('dropCreat');
-        if (!clip) {
-            return;
-        }
-
-        const intervalSec = Math.max(0.05, clip.getDuration() * 0.9);
-        const volume = this.catalog.dropCreatVolume;
-        for (let i = 0; i < repeatCount; i++) {
-            setTimeout(() => {
-                this.playSound('dropCreat', volume);
-            }, i * intervalSec * 1000);
-        }
+    public playDropCreat(): void {
+        this.playSound('dropCreat', this.catalog.dropCreatVolume);
     }
 
     public playSoldOut(): void {
-        this.playSound('soldOut');
+        this.playSound('soldOut', this.catalog.soldOutVolume);
     }
 
     public stopBackgroundMusic(): void {
@@ -111,6 +107,25 @@ export class AudioController {
         }
     }
 
+    private setupBackgroundMusicLoop(): void {
+        if (!this.musicAudioSource) {
+            return;
+        }
+
+        this.musicAudioSource.loop = true;
+        this.musicAudioSource.node.off(AudioSource.EventType.ENDED, this.restartBackgroundMusic, this);
+        this.musicAudioSource.node.on(AudioSource.EventType.ENDED, this.restartBackgroundMusic, this);
+    }
+
+    private readonly restartBackgroundMusic = (): void => {
+        if (this.musicMutedForCta || !this.musicAudioSource) {
+            return;
+        }
+
+        this.musicAudioSource.currentTime = 0;
+        this.musicAudioSource.play();
+    };
+
     private playBackgroundMusic(): void {
         if (this.musicMutedForCta) {
             return;
@@ -118,8 +133,8 @@ export class AudioController {
 
         const musicClip = this.catalog.getBackgroundMusic();
         if (musicClip && this.musicAudioSource) {
+            this.setupBackgroundMusicLoop();
             this.musicAudioSource.clip = musicClip;
-            this.musicAudioSource.loop = true;
             this.musicAudioSource.volume = 0.3;
             this.musicAudioSource.play();
         }

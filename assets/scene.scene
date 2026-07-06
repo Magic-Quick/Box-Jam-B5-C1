@@ -9108,23 +9108,28 @@
       "__expectedType__": "cc.AudioClip"
     },
     "itemDrop": {
-      "__uuid__": "d13b6222-5531-4a92-87c0-99c32d7c0e31",
+      "__uuid__": "b1e06cb3-730c-4f47-80be-e3f962334649",
       "__expectedType__": "cc.AudioClip"
     },
-    "itemDropCrateVolume": 1.35,
+    "wooshVolume": 2,
+    "woosh": {
+      "__uuid__": "b79afb15-80cb-4b4b-bc7b-37fda7a28428",
+      "__expectedType__": "cc.AudioClip"
+    },
     "wrong": {
       "__uuid__": "a498e168-93b8-484b-b2a1-5a198e0fbcf7",
       "__expectedType__": "cc.AudioClip"
     },
     "dropCreat": {
-      "__uuid__": "f7792983-89e6-4c71-bd69-9e92a0af9af0",
+      "__uuid__": "fe5f7638-3461-401d-b923-a1dfeb938865",
       "__expectedType__": "cc.AudioClip"
     },
-    "dropCreatVolume": 1.8,
+    "dropCreatVolume": 2,
     "soldOutAudio": {
       "__uuid__": "3ad1280f-9f16-4012-968c-392d70cd4b4f",
       "__expectedType__": "cc.AudioClip"
     },
+    "soldOutVolume": 0.3,
     "_id": "f5LiTp3vRBkLT2KS7N2/LV"
   },
   {
