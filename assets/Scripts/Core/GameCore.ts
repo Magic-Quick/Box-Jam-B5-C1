@@ -134,10 +134,10 @@ export class GameCore extends Component {
   crateStackOffsetY: number = 6;
 
   @property({ type: CCFloat, tooltip: 'Длительность полета буквы к корзине (сек)' })
-  crateFlyDuration: number = 0.28;
+  crateFlyDuration: number = 0.24;
 
   @property({ type: CCFloat, tooltip: 'Задержка между вылетом букв к корзине (сек)' })
-  crateFlyStagger: number = 0.1;
+  crateFlyStagger: number = 0.14;
 
   @property({ type: CCFloat, tooltip: 'Пауза над корзиной перед падением (сек)' })
   crateHoverHoldDuration: number = 0.4;

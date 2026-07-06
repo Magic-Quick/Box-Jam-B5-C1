@@ -9063,8 +9063,8 @@
     "bankSettleSecondBounceRatio": 0.45,
     "crateHoverOffsetY": 65,
     "crateStackOffsetY": 6,
-    "crateFlyDuration": 0.28,
-    "crateFlyStagger": 0.17,
+    "crateFlyDuration": 0.24,
+    "crateFlyStagger": 0.14,
     "crateHoverHoldDuration": 0.4,
     "crateDropDuration": 0.1,
     "crateDropStagger": 0.04,
@@ -9113,7 +9113,7 @@
     },
     "wooshVolume": 2,
     "woosh": {
-      "__uuid__": "b79afb15-80cb-4b4b-bc7b-37fda7a28428",
+      "__uuid__": "8eadc238-d313-454f-844d-7807914291c1",
       "__expectedType__": "cc.AudioClip"
     },
     "wrong": {
