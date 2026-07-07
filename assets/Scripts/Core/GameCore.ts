@@ -228,13 +228,11 @@ export class GameCore extends Component {
   private canvasTapNode: Node | null = null;
   private handHintToken: number = 0;
   private handHintBaseScale: Vec3 = new Vec3(1, 1, 1);
-  private handHintCycleUsedNodes: Set<Node> = new Set();
   private static readonly HAND_SPRITE_UUID = 'fce508d0-f38a-48f0-b46a-83e787e360e9@f9941';
   private static readonly HAND_HINT_SEQUENCE = ['A', 'P', 'P', 'L', 'E'];
   private static readonly HAND_HINT_MOVE_DURATION = 0.55;
   private static readonly HAND_HINT_TAP_DURATION = 0.12;
-  private static readonly HAND_HINT_STEP_DELAY = 0.22;
-  private static readonly HAND_HINT_CYCLE_DELAY = 0.6;
+  private static readonly HAND_HINT_IDLE_DELAY = 0.35;
   private static readonly HAND_HINT_RETRY_DELAY = 0.4;
   private readonly onCanvasResize = (): void => {
     this.setupCanvasTapListeners();
@@ -545,11 +543,10 @@ export class GameCore extends Component {
 
       Tween.stopAllByTarget(hand);
       this.handHintToken++;
-      this.handHintCycleUsedNodes.clear();
       hand.active = true;
       hand.scale = this.handHintBaseScale.clone();
       hand.setSiblingIndex(hand.parent.children.length - 1);
-      this.playHandHintStep(this.getHandHintNextStepIndex(), this.handHintToken);
+      this.playHandHintStep(this.handHintToken);
     });
   }
 
@@ -597,7 +594,6 @@ export class GameCore extends Component {
 
       this.handHintToken++;
       const token = this.handHintToken;
-      this.handHintCycleUsedNodes.clear();
       Tween.stopAllByTarget(hand);
       hand.active = true;
       if (hand.parent) {
@@ -610,11 +606,11 @@ export class GameCore extends Component {
         return;
       }
 
-      this.playHandHintStep(nextStep, token);
+      this.playHandHintStep(token);
     });
   }
 
-  private playHandHintStep(stepIndex: number, token: number): void {
+  private playHandHintStep(token: number): void {
     const hand = this.resolveHandHint();
     if (!hand || token !== this.handHintToken) {
       return;
@@ -626,34 +622,25 @@ export class GameCore extends Component {
     }
 
     const sequence = GameCore.HAND_HINT_SEQUENCE;
-    const progressStep = this.getHandHintNextStepIndex();
+    const stepIndex = this.getHandHintNextStepIndex();
 
-    if (progressStep >= sequence.length) {
+    if (stepIndex >= sequence.length) {
       this.stopHandHint();
       return;
-    }
-
-    if (stepIndex < progressStep) {
-      stepIndex = progressStep;
-    }
-
-    if (stepIndex === progressStep) {
-      this.handHintCycleUsedNodes.clear();
     }
 
     const letter = sequence[stepIndex];
     const target = this.findTappableNodeForLetter(
       letter,
-      this.getHandHintExcludeNodes(this.handHintCycleUsedNodes)
+      this.getHandHintExcludeNodes()
     );
     if (!target) {
       this.scheduleOnce(
-        () => this.playHandHintStep(stepIndex, token),
+        () => this.playHandHintStep(token),
         this.getHandHintDuration(GameCore.HAND_HINT_RETRY_DELAY)
       );
       return;
     }
-    this.handHintCycleUsedNodes.add(target);
 
     const targetPos = this.getHandHintWorldPosition(target);
 
@@ -674,18 +661,58 @@ export class GameCore extends Component {
         if (token !== this.handHintToken) {
           return;
         }
+        this.playHandHintPulseLoop(stepIndex, token);
+      })
+      .start();
+  }
 
-        let nextIndex = stepIndex + 1;
-        let delay = GameCore.HAND_HINT_STEP_DELAY;
+  private playHandHintPulseLoop(stepIndex: number, token: number): void {
+    if (token !== this.handHintToken || this.usedWords.has('APPLE')) {
+      return;
+    }
 
-        if (nextIndex >= sequence.length) {
-          nextIndex = this.getHandHintNextStepIndex();
-          delay = GameCore.HAND_HINT_CYCLE_DELAY;
+    if (this.getHandHintNextStepIndex() !== stepIndex) {
+      return;
+    }
+
+    const hand = this.resolveHandHint();
+    if (!hand?.isValid || !hand.active) {
+      return;
+    }
+
+    const letter = GameCore.HAND_HINT_SEQUENCE[stepIndex];
+    const target = this.findTappableNodeForLetter(
+      letter,
+      this.getHandHintExcludeNodes()
+    );
+    if (!target) {
+      this.scheduleOnce(
+        () => this.playHandHintPulseLoop(stepIndex, token),
+        this.getHandHintDuration(GameCore.HAND_HINT_RETRY_DELAY)
+      );
+      return;
+    }
+
+    hand.worldPosition = this.getHandHintWorldPosition(target);
+
+    const pulseScale = new Vec3(
+      this.handHintBaseScale.x * 0.92,
+      this.handHintBaseScale.y * 0.92,
+      this.handHintBaseScale.z
+    );
+    const tapDuration = this.getHandHintDuration(GameCore.HAND_HINT_TAP_DURATION);
+
+    Tween.stopAllByTarget(hand);
+    tween(hand)
+      .to(tapDuration, { scale: pulseScale }, { easing: 'quadOut' })
+      .to(tapDuration, { scale: this.handHintBaseScale.clone() }, { easing: 'quadIn' })
+      .call(() => {
+        if (token !== this.handHintToken || this.getHandHintNextStepIndex() !== stepIndex) {
+          return;
         }
-
         this.scheduleOnce(
-          () => this.playHandHintStep(nextIndex, token),
-          this.getHandHintDuration(delay)
+          () => this.playHandHintPulseLoop(stepIndex, token),
+          this.getHandHintDuration(GameCore.HAND_HINT_IDLE_DELAY)
         );
       })
       .start();
@@ -1749,18 +1776,20 @@ export class GameCore extends Component {
     return crateWorldY + baseOffset + index * stackStep;
   }
 
-  private findCrateFruitBg(crateNode: Node): Node | null {
+  private findCrateCreatUp(crateNode: Node): Node | null {
     for (const child of crateNode.children) {
-      if (child.name.startsWith('Fruit_BG')) {
+      const name = child.name.toLowerCase();
+      if (name === 'creatup' || name.startsWith('creatup-') || name.startsWith('creatup_')) {
         return child;
       }
     }
 
-    return crateNode.children.find((child) => child.name.toLowerCase().includes('fruit')) ?? null;
+    return crateNode.children.find((child) => child.name.toLowerCase().includes('creatup')) ?? null;
   }
 
   private placeLettersInsideCrate(crateNode: Node, letters: StackLetter[]): void {
-    const fruitBg = this.findCrateFruitBg(crateNode);
+    const creatUp = this.findCrateCreatUp(crateNode);
+    const insertIndex = creatUp?.isValid ? creatUp.getSiblingIndex() : crateNode.children.length;
 
     letters.forEach((sl: StackLetter) => {
       if (!sl.node.isValid) {
@@ -1775,26 +1804,12 @@ export class GameCore extends Component {
       sl.node.worldScale = worldScale;
     });
 
+    // Только буквы: вставляем перед creatup. Порядок creat → creatup → Fruit_BG не трогаем.
     letters.forEach((sl: StackLetter, index: number) => {
       if (sl.node.isValid) {
-        sl.node.setSiblingIndex(index);
+        sl.node.setSiblingIndex(insertIndex + index);
       }
     });
-
-    if (!fruitBg?.isValid) {
-      return;
-    }
-
-    fruitBg.setSiblingIndex(letters.length);
-
-    let nextIndex = letters.length + 1;
-    for (const child of crateNode.children) {
-      if (child === fruitBg || letters.some((sl) => sl.node === child)) {
-        continue;
-      }
-
-      child.setSiblingIndex(nextIndex++);
-    }
   }
 
   private dropLettersIntoCrate(
