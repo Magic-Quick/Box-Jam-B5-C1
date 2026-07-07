@@ -7293,7 +7293,7 @@
     "propertyPath": [
       "_name"
     ],
-    "value": "Sold_Out_Watermelon"
+    "value": "Sold_Out_Melon"
   },
   {
     "__type__": "cc.TargetInfo",
@@ -9042,6 +9042,10 @@
     "ctaScreen": {
       "__id__": 461
     },
+    "handHint": null,
+    "handSpriteFrame": null,
+    "handHintOffsetY": 55,
+    "handHintSpeed": 1,
     "selectScale": 1.2,
     "animDuration": 0.25,
     "letterSpacing": 60,

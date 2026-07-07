@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find, UIOpacity, view, Sprite } from 'cc';
+import { _decorator, Component, Node, EventTouch, UITransform, Vec3, tween, Tween, Animation, CCFloat, Input, input, AudioSource, find, UIOpacity, view, Sprite, SpriteFrame, assetManager } from 'cc';
 import { AudioCatalog } from '../Audio/audio-catalog';
 import { AudioController } from '../Audio/audio-controller';
 import plbx from '../plbx_html/plbx_html_playable';
@@ -67,6 +67,18 @@ export class GameCore extends Component {
 
   @property({ type: Node, tooltip: 'Экран CTA (CTAScreen)' })
   ctaScreen: Node = null;
+
+  @property({ type: Node, tooltip: 'Нода руки-подсказки (опционально; иначе создаётся на Canvas)' })
+  handHint: Node = null;
+
+  @property({ type: SpriteFrame, tooltip: 'Спрайт руки (assets/Art/Sprites/Hand/Hand)' })
+  handSpriteFrame: SpriteFrame = null;
+
+  @property({ type: CCFloat, tooltip: 'Тонкая подстройка позиции руки по Y (px)' })
+  handHintOffsetY: number = 0;
+
+  @property({ type: CCFloat, tooltip: 'Скорость руки-подсказки (1 = медленно, 2 = в 2 раза быстрее)' })
+  handHintSpeed: number = 1;
 
   // ===== ПАРАМЕТРЫ =====
 
@@ -181,7 +193,7 @@ export class GameCore extends Component {
   // ===== ВНУТРЕННИЕ ДАННЫЕ =====
 
   // Список валидных слов
-  private validWords: string[] = ['GRAPE', 'LEMON', 'PEACH', 'APPLE', 'WATERMELON', 'MANGO'];
+  private validWords: string[] = ['GRAPE', 'LEMON', 'PEACH', 'APPLE', 'MELON', 'MANGO'];
 
   // Все стопки
   private stacks: LetterStack[] = [];
@@ -212,6 +224,16 @@ export class GameCore extends Component {
   private lastTapTime: number = 0;
   private static readonly TAP_DEBOUNCE_MS = 150;
   private canvasTapNode: Node | null = null;
+  private handHintToken: number = 0;
+  private handHintBaseScale: Vec3 = new Vec3(1, 1, 1);
+  private handHintCycleUsedNodes: Set<Node> = new Set();
+  private static readonly HAND_SPRITE_UUID = 'fce508d0-f38a-48f0-b46a-83e787e360e9@f9941';
+  private static readonly HAND_HINT_SEQUENCE = ['A', 'P', 'P', 'L', 'E'];
+  private static readonly HAND_HINT_MOVE_DURATION = 0.55;
+  private static readonly HAND_HINT_TAP_DURATION = 0.12;
+  private static readonly HAND_HINT_STEP_DELAY = 0.22;
+  private static readonly HAND_HINT_CYCLE_DELAY = 0.6;
+  private static readonly HAND_HINT_RETRY_DELAY = 0.4;
   private readonly onCanvasResize = (): void => {
     this.setupCanvasTapListeners();
     this.setupSystemInput();
@@ -231,6 +253,7 @@ export class GameCore extends Component {
     this.setupAudio();
     this.setupCtaScreen();
     this.setupGlobalInput();
+    this.setupHandHint();
     plbx.game_ready();
   }
 
@@ -241,6 +264,7 @@ export class GameCore extends Component {
     this.audioController?.stop();
     this.audioController = null;
     this.musicAudioSource = null;
+    this.stopHandHint();
   }
 
   private setupAudio(): void {
@@ -398,6 +422,311 @@ export class GameCore extends Component {
     this.resetCtaVisual();
     cta.active = false;
     console.log(`✓ GameCore: CTA скрыт, показ после ${this.ctaTapCount} нажатий`);
+  }
+
+  private resolveHandHint(): Node | null {
+    if (this.handHint?.isValid) {
+      return this.handHint;
+    }
+
+    const candidates = [
+      'Canvas/hand',
+      'Canvas/Hand',
+      'Canvas/HandHint',
+      'hand',
+      'Hand',
+    ];
+
+    for (const path of candidates) {
+      const node = find(path);
+      if (node) {
+        this.handHint = node;
+        return node;
+      }
+    }
+
+    return null;
+  }
+
+  private ensureHandSpriteFrame(onReady: () => void): void {
+    if (this.handSpriteFrame) {
+      onReady();
+      return;
+    }
+
+    assetManager.loadAny({ uuid: GameCore.HAND_SPRITE_UUID }, (err, asset) => {
+      if (!err && asset) {
+        this.handSpriteFrame = asset as SpriteFrame;
+      } else {
+        console.warn('GameCore: не удалось загрузить спрайт Hand из ассетов');
+      }
+      onReady();
+    });
+  }
+
+  private createHandHintNode(): Node | null {
+    const canvas = find('Canvas');
+    if (!canvas) {
+      console.warn('GameCore: Canvas не найден — рука-подсказка не создана');
+      return null;
+    }
+
+    if (!this.handSpriteFrame) {
+      return null;
+    }
+
+    let hand = canvas.getChildByName('Hand');
+    if (!hand?.isValid) {
+      hand = new Node('Hand');
+      hand.layer = canvas.layer;
+      const uiTransform = hand.addComponent(UITransform);
+      const sprite = hand.addComponent(Sprite);
+      sprite.spriteFrame = this.handSpriteFrame;
+      const frameSize = this.handSpriteFrame.rect;
+      uiTransform.setContentSize(frameSize.width, frameSize.height);
+      hand.setParent(canvas);
+    } else {
+      const sprite = hand.getComponent(Sprite) ?? hand.addComponent(Sprite);
+      if (!sprite.spriteFrame) {
+        sprite.spriteFrame = this.handSpriteFrame;
+      }
+    }
+
+    hand.setSiblingIndex(canvas.children.length - 1);
+    this.handHint = hand;
+    return hand;
+  }
+
+  private ensureHandHintNode(onReady: (hand: Node | null) => void): void {
+    const existing = this.resolveHandHint();
+    if (existing) {
+      this.ensureHandSpriteFrame(() => {
+        if (this.handSpriteFrame) {
+          const sprite = existing.getComponent(Sprite) ?? existing.addComponent(Sprite);
+          if (!sprite.spriteFrame) {
+            sprite.spriteFrame = this.handSpriteFrame;
+          }
+        }
+        onReady(existing);
+      });
+      return;
+    }
+
+    this.ensureHandSpriteFrame(() => {
+      onReady(this.createHandHintNode());
+    });
+  }
+
+  private setupHandHint(): void {
+    this.ensureHandHintNode((hand) => {
+      if (!hand) {
+        console.warn('GameCore: рука-подсказка недоступна (нет Hand спрайта)');
+        return;
+      }
+
+      this.handHintBaseScale = hand.scale.clone();
+      hand.active = false;
+
+      if (!this.usedWords.has('APPLE')) {
+        this.startHandHintLoop();
+      }
+    });
+  }
+
+  private startHandHintLoop(): void {
+    this.ensureHandHintNode((hand) => {
+      if (!hand) {
+        return;
+      }
+
+      this.stopHandHint();
+      this.handHintToken++;
+      this.handHintCycleUsedNodes.clear();
+      hand.active = true;
+      hand.scale = this.handHintBaseScale.clone();
+      hand.setSiblingIndex(hand.parent.children.length - 1);
+      this.playHandHintStep(this.getHandHintNextStepIndex(), this.handHintToken);
+    });
+  }
+
+  private stopHandHint(): void {
+    this.handHintToken++;
+    if (!this.handHint?.isValid) {
+      return;
+    }
+
+    Tween.stopAllByTarget(this.handHint);
+    this.handHint.active = false;
+    this.handHint.scale = this.handHintBaseScale.clone();
+  }
+
+  private getHandHintNextStepIndex(): number {
+    for (let i = 0; i < this.selectedLetters.length; i++) {
+      const expected = GameCore.HAND_HINT_SEQUENCE[i];
+      if (!expected || this.selectedLetters[i].letter !== expected) {
+        return 0;
+      }
+    }
+    return Math.min(this.selectedLetters.length, GameCore.HAND_HINT_SEQUENCE.length);
+  }
+
+  private getHandHintExcludeNodes(extra: Set<Node> = new Set()): Set<Node> {
+    const exclude = new Set(extra);
+    for (const sl of this.selectedLetters) {
+      if (sl.node?.isValid) {
+        exclude.add(sl.node);
+      }
+    }
+    return exclude;
+  }
+
+  private refreshHandHintProgress(): void {
+    if (this.usedWords.has('APPLE')) {
+      this.stopHandHint();
+      return;
+    }
+
+    const hand = this.handHint;
+    if (!hand?.isValid || !hand.active) {
+      return;
+    }
+
+    this.handHintToken++;
+    const token = this.handHintToken;
+    this.handHintCycleUsedNodes.clear();
+    Tween.stopAllByTarget(hand);
+
+    const nextStep = this.getHandHintNextStepIndex();
+    if (nextStep >= GameCore.HAND_HINT_SEQUENCE.length) {
+      this.stopHandHint();
+      return;
+    }
+
+    this.playHandHintStep(nextStep, token);
+  }
+
+  private playHandHintStep(stepIndex: number, token: number): void {
+    const hand = this.resolveHandHint();
+    if (!hand || token !== this.handHintToken) {
+      return;
+    }
+
+    if (this.usedWords.has('APPLE')) {
+      this.stopHandHint();
+      return;
+    }
+
+    const sequence = GameCore.HAND_HINT_SEQUENCE;
+    const progressStep = this.getHandHintNextStepIndex();
+
+    if (progressStep >= sequence.length) {
+      this.stopHandHint();
+      return;
+    }
+
+    if (stepIndex < progressStep) {
+      stepIndex = progressStep;
+    }
+
+    if (stepIndex === progressStep) {
+      this.handHintCycleUsedNodes.clear();
+    }
+
+    const letter = sequence[stepIndex];
+    const target = this.findTappableNodeForLetter(
+      letter,
+      this.getHandHintExcludeNodes(this.handHintCycleUsedNodes)
+    );
+    if (!target) {
+      this.scheduleOnce(
+        () => this.playHandHintStep(stepIndex, token),
+        this.getHandHintDuration(GameCore.HAND_HINT_RETRY_DELAY)
+      );
+      return;
+    }
+    this.handHintCycleUsedNodes.add(target);
+
+    const targetPos = this.getHandHintWorldPosition(target);
+
+    const pulseScale = new Vec3(
+      this.handHintBaseScale.x * 0.92,
+      this.handHintBaseScale.y * 0.92,
+      this.handHintBaseScale.z
+    );
+
+    Tween.stopAllByTarget(hand);
+    const moveDuration = this.getHandHintDuration(GameCore.HAND_HINT_MOVE_DURATION);
+    const tapDuration = this.getHandHintDuration(GameCore.HAND_HINT_TAP_DURATION);
+    tween(hand)
+      .to(moveDuration, { worldPosition: targetPos }, { easing: 'sineInOut' })
+      .to(tapDuration, { scale: pulseScale }, { easing: 'quadOut' })
+      .to(tapDuration, { scale: this.handHintBaseScale.clone() }, { easing: 'quadIn' })
+      .call(() => {
+        if (token !== this.handHintToken) {
+          return;
+        }
+
+        let nextIndex = stepIndex + 1;
+        let delay = GameCore.HAND_HINT_STEP_DELAY;
+
+        if (nextIndex >= sequence.length) {
+          nextIndex = this.getHandHintNextStepIndex();
+          delay = GameCore.HAND_HINT_CYCLE_DELAY;
+        }
+
+        this.scheduleOnce(
+          () => this.playHandHintStep(nextIndex, token),
+          this.getHandHintDuration(delay)
+        );
+      })
+      .start();
+  }
+
+  private getHandHintDuration(baseSeconds: number): number {
+    const speed = Math.max(0.1, this.handHintSpeed);
+    return baseSeconds / speed;
+  }
+
+  private getHandHintWorldPosition(target: Node): Vec3 {
+    const pos = target.worldPosition.clone();
+    const letterUi = target.getComponent(UITransform);
+    if (letterUi) {
+      const letterHalfH = (letterUi.contentSize.height * Math.abs(target.worldScale.y)) / 2;
+      pos.y -= letterHalfH * 0.55;
+    }
+
+    const handUi = this.handHint?.getComponent(UITransform);
+    if (handUi) {
+      const handHalfH = (handUi.contentSize.height * Math.abs(this.handHint.worldScale.y)) / 2;
+      // Палец в верхней части спрайта — опускаем pivot руки ещё ниже
+      pos.y -= handHalfH * 0.42;
+    }
+
+    pos.y += this.handHintOffsetY;
+    return pos;
+  }
+
+  private findTappableNodeForLetter(letter: string, excludeNodes: Set<Node> = new Set()): Node | null {
+    const candidates: StackLetter[] = [];
+    for (const stack of this.stacks) {
+      const top = this.getTopLetter(stack);
+      if (
+        top &&
+        !top.taken &&
+        top.node.isValid &&
+        top.letter === letter &&
+        !excludeNodes.has(top.node)
+      ) {
+        candidates.push(top);
+      }
+    }
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    candidates.sort((a, b) => b.node.worldPosition.y - a.node.worldPosition.y);
+    return candidates[0].node;
   }
 
   private resetCtaVisual(): void {
@@ -593,11 +922,22 @@ export class GameCore extends Component {
 
       this.stacks.push(stack);
 
-      const order = stack.letters.map(l => `${l.letter}(d${l.depth},z${l.node.position.z.toFixed(0)})`).join(' → ');
-      console.log(`  Стопка[${stackIndex}] "${rootNode.name}": порядок взятия ${order}`);
+      const order = this.getStackTakeOrder(stack)
+        .map(l => `${l.letter}(${l.node.name})`)
+        .join(' → ');
+      const top = this.getTopLetter(stack);
+      console.log(
+        `  Стопка[${stackIndex}] "${rootNode.name}": снизу→верх ${order}; сейчас сверху: ${top ? `${top.letter}(${top.node.name})` : '—'}`
+      );
     });
 
     console.log(`GameCore: построено ${this.stacks.length} стопок`);
+  }
+
+  private getStackTakeOrder(stack: LetterStack): StackLetter[] {
+    return stack.letters
+      .filter(sl => !sl.taken && sl.node.isValid)
+      .sort((a, b) => a.node.worldPosition.y - b.node.worldPosition.y);
   }
 
   /**
@@ -778,12 +1118,16 @@ export class GameCore extends Component {
    * Получить верхнюю (доступную) букву стопки
    */
   private getTopLetter(stack: LetterStack): StackLetter | null {
+    let top: StackLetter | null = null;
     for (const sl of stack.letters) {
-      if (!sl.taken) {
-        return sl;
+      if (sl.taken || !sl.node.isValid) {
+        continue;
+      }
+      if (!top || sl.node.worldPosition.y > top.node.worldPosition.y) {
+        top = sl;
       }
     }
-    return null;
+    return top;
   }
 
   /**
@@ -810,8 +1154,9 @@ export class GameCore extends Component {
 
     // Добавить в выбор
     this.selectedLetters.push(topLetter);
+    this.refreshHandHintProgress();
 
-    const invalidSelection = this.isInvalidWordSelection();
+    const invalidSelection = this.shouldTriggerFailOnSelection();
 
     // Отсоединить букву от родителя, чтобы двигалась ТОЛЬКО она
     this.detachLetter(topLetter);
@@ -984,7 +1329,7 @@ export class GameCore extends Component {
   private onLetterBankPlacementComplete(): void {
     const currentWord = this.getCurrentWord();
 
-    if (this.isInvalidWordSelection()) {
+    if (this.shouldTriggerFailOnSelection()) {
       if (!this.isProcessing) {
         console.log(`   ❌ НЕВЕРНАЯ комбинация: "${currentWord}"`);
         this.onWordError();
@@ -1013,6 +1358,10 @@ export class GameCore extends Component {
     }
 
     return !this.validWords.some((word: string) => word.startsWith(currentWord));
+  }
+
+  private shouldTriggerFailOnSelection(): boolean {
+    return this.selectedLetters.length >= 3 && this.isInvalidWordSelection();
   }
 
   private areAllSelectedLettersPlacedInBank(): boolean {
@@ -1115,7 +1464,7 @@ export class GameCore extends Component {
   private checkWord(): void {
     const currentWord = this.getCurrentWord();
 
-    if (this.isInvalidWordSelection()) {
+    if (this.shouldTriggerFailOnSelection()) {
       console.log(`   ❌ НЕВЕРНАЯ комбинация: "${currentWord}"`);
       this.onWordError();
       return;
@@ -1141,6 +1490,9 @@ export class GameCore extends Component {
 
     this.isProcessing = true;
     this.usedWords.add(word);
+    if (word === 'APPLE') {
+      this.stopHandHint();
+    }
 
     const letters = [...this.selectedLetters];
     const crateNode = this.findCrateByWord(word);
@@ -1201,14 +1553,25 @@ export class GameCore extends Component {
     });
   }
 
+  private getWordAliases(word: string): string[] {
+    const upper = word.toUpperCase();
+    if (upper === 'MELON') {
+      return ['MELON', 'WATERMELON'];
+    }
+    if (upper === 'WATERMELON') {
+      return ['WATERMELON', 'MELON'];
+    }
+    return [upper];
+  }
+
   private findCrateByWord(word: string): Node | null {
     if (!this.cratesContainer) {
       return null;
     }
 
-    const target = word.toLowerCase();
+    const targets = this.getWordAliases(word).map((w) => w.toLowerCase());
     for (const crateRoot of this.cratesContainer.children) {
-      if (this.nodeContainsName(crateRoot, target)) {
+      if (targets.some((target) => this.nodeContainsName(crateRoot, target))) {
         return crateRoot;
       }
     }
@@ -1296,12 +1659,15 @@ export class GameCore extends Component {
     const flyScale = new Vec3(hoverScale, hoverScale, 1);
     let completedFlies = 0;
 
+    // Буквы сразу летят "внутрь" корзины, без зависания над ней.
+    this.placeLettersInsideCrate(crateNode, letters);
+
     this.audioController?.playCrateFlightWoosh();
 
     letters.forEach((sl: StackLetter, index: number) => {
       const targetPos = new Vec3(
         crateWorld.x,
-        this.getCrateHoverWorldY(crateWorld.y, index, letters.length),
+        crateWorld.y + this.crateHoverOffsetY * 0.25,
         crateWorld.z
       );
 
@@ -1321,15 +1687,14 @@ export class GameCore extends Component {
               return;
             }
 
+            this.audioController?.playDropCreat();
+            sl.node.active = false;
             completedFlies++;
             if (completedFlies >= letters.length) {
-              this.scheduleOnce(() => {
-                if (token !== this.crateSequenceToken) {
-                  return;
-                }
-                this.placeLettersInsideCrate(crateNode, letters);
-                this.dropLettersIntoCrate(word, letters, crateNode, letters.length - 1, token);
-              }, this.crateHoverHoldDuration);
+              this.showStampByWord(word);
+              this.hideSelectedLetters();
+              this.clearSelection();
+              this.isProcessing = false;
             }
           })
           .start();
@@ -1489,6 +1854,7 @@ export class GameCore extends Component {
     this.scheduleOnce(() => {
       this.returnLettersToStacks();
       this.clearSelection();
+      this.refreshHandHintProgress();
       this.isProcessing = false;
     }, 0.4);
   }
@@ -1568,7 +1934,10 @@ export class GameCore extends Component {
    */
   private showStampByWord(word: string): void {
     // Ищем штамп по имени, содержащему слово (например "Stamp_GRAPE" или "GRAPE")
-    const stamp = this.stampNodes.find(s => s && s.name.toUpperCase().includes(word));
+    const aliases = this.getWordAliases(word);
+    const stamp = this.stampNodes.find((s) =>
+      s && aliases.some((alias) => s.name.toUpperCase().includes(alias))
+    );
     
     if (!stamp) {
       console.warn(`   ⚠️ Штамп для слова "${word}" не найден среди ${this.stampNodes.length} штампов`);
