@@ -9043,7 +9043,10 @@
       "__id__": 461
     },
     "handHint": null,
-    "handSpriteFrame": null,
+    "handSpriteFrame": {
+      "__uuid__": "fce508d0-f38a-48f0-b46a-83e787e360e9@f9941",
+      "__expectedType__": "cc.SpriteFrame"
+    },
     "handHintOffsetY": 55,
     "handHintSpeed": 1,
     "selectScale": 1.2,
@@ -9067,9 +9070,9 @@
     "bankSettleSecondBounceRatio": 0.45,
     "crateHoverOffsetY": 65,
     "crateStackOffsetY": 6,
-    "crateFlyDuration": 0.24,
-    "crateFlyStagger": 0.14,
-    "crateHoverHoldDuration": 0.4,
+    "crateFlyDuration": 0.13,
+    "crateFlyStagger": 0.09,
+    "crateHoverHoldDuration": 0.2,
     "crateDropDuration": 0.1,
     "crateDropStagger": 0.04,
     "crateDropOffsetY": -16,

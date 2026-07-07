@@ -146,10 +146,10 @@ export class GameCore extends Component {
   crateStackOffsetY: number = 6;
 
   @property({ type: CCFloat, tooltip: 'Длительность полета буквы к корзине (сек)' })
-  crateFlyDuration: number = 0.24;
+  crateFlyDuration: number = 0.16;
 
   @property({ type: CCFloat, tooltip: 'Задержка между вылетом букв к корзине (сек)' })
-  crateFlyStagger: number = 0.14;
+  crateFlyStagger: number = 0.09;
 
   @property({ type: CCFloat, tooltip: 'Пауза над корзиной перед падением (сек)' })
   crateHoverHoldDuration: number = 0.4;
@@ -215,6 +215,8 @@ export class GameCore extends Component {
   private isProcessing: boolean = false;
   private isSelectFeedbackPlaying: boolean = false;
   private glowHomeParent: Node = null;
+  private failEffectHomeParent: Node | null = null;
+  private failEffectHomeSiblingIndex: number = 0;
   private letterFlyToken: number = 0;
   private crateSequenceToken: number = 0;
   private audioController: AudioController | null = null;
@@ -306,6 +308,8 @@ export class GameCore extends Component {
       return;
     }
 
+    this.failEffectHomeParent = this.failEffect.parent;
+    this.failEffectHomeSiblingIndex = this.failEffect.getSiblingIndex();
     this.failEffect.active = false;
     this.resetFailVisual();
   }
@@ -454,11 +458,11 @@ export class GameCore extends Component {
       return;
     }
 
-    assetManager.loadAny({ uuid: GameCore.HAND_SPRITE_UUID }, (err, asset) => {
-      if (!err && asset) {
-        this.handSpriteFrame = asset as SpriteFrame;
+    assetManager.loadAny({ uuid: GameCore.HAND_SPRITE_UUID }, (uuidErr, uuidAsset) => {
+      if (!uuidErr && uuidAsset) {
+        this.handSpriteFrame = uuidAsset as SpriteFrame;
       } else {
-        console.warn('GameCore: не удалось загрузить спрайт Hand из ассетов');
+        console.warn('GameCore: не удалось загрузить спрайт Hand (назначьте Hand Sprite Frame в Inspector)');
       }
       onReady();
     });
@@ -539,7 +543,7 @@ export class GameCore extends Component {
         return;
       }
 
-      this.stopHandHint();
+      Tween.stopAllByTarget(hand);
       this.handHintToken++;
       this.handHintCycleUsedNodes.clear();
       hand.active = true;
@@ -586,23 +590,28 @@ export class GameCore extends Component {
       return;
     }
 
-    const hand = this.handHint;
-    if (!hand?.isValid || !hand.active) {
-      return;
-    }
+    this.ensureHandHintNode((hand) => {
+      if (!hand?.isValid) {
+        return;
+      }
 
-    this.handHintToken++;
-    const token = this.handHintToken;
-    this.handHintCycleUsedNodes.clear();
-    Tween.stopAllByTarget(hand);
+      this.handHintToken++;
+      const token = this.handHintToken;
+      this.handHintCycleUsedNodes.clear();
+      Tween.stopAllByTarget(hand);
+      hand.active = true;
+      if (hand.parent) {
+        hand.setSiblingIndex(hand.parent.children.length - 1);
+      }
 
-    const nextStep = this.getHandHintNextStepIndex();
-    if (nextStep >= GameCore.HAND_HINT_SEQUENCE.length) {
-      this.stopHandHint();
-      return;
-    }
+      const nextStep = this.getHandHintNextStepIndex();
+      if (nextStep >= GameCore.HAND_HINT_SEQUENCE.length) {
+        this.stopHandHint();
+        return;
+      }
 
-    this.playHandHintStep(nextStep, token);
+      this.playHandHintStep(nextStep, token);
+    });
   }
 
   private playHandHintStep(stepIndex: number, token: number): void {
@@ -1638,6 +1647,11 @@ export class GameCore extends Component {
     }
 
     layer.setSiblingIndex(layer.parent.children.length - 1);
+
+    // Fail должен оставаться поверх слоя полёта букв при возврате после ошибки
+    if (this.failEffect?.active) {
+      this.bringFailEffectToFront();
+    }
   }
 
   private findCanvasNode(): Node {
@@ -1659,15 +1673,12 @@ export class GameCore extends Component {
     const flyScale = new Vec3(hoverScale, hoverScale, 1);
     let completedFlies = 0;
 
-    // Буквы сразу летят "внутрь" корзины, без зависания над ней.
-    this.placeLettersInsideCrate(crateNode, letters);
-
     this.audioController?.playCrateFlightWoosh();
 
     letters.forEach((sl: StackLetter, index: number) => {
       const targetPos = new Vec3(
         crateWorld.x,
-        crateWorld.y + this.crateHoverOffsetY * 0.25,
+        this.getCrateHoverWorldY(crateWorld.y, index, letters.length),
         crateWorld.z
       );
 
@@ -1687,14 +1698,16 @@ export class GameCore extends Component {
               return;
             }
 
-            this.audioController?.playDropCreat();
-            sl.node.active = false;
             completedFlies++;
             if (completedFlies >= letters.length) {
-              this.showStampByWord(word);
-              this.hideSelectedLetters();
-              this.clearSelection();
-              this.isProcessing = false;
+              this.scheduleOnce(() => {
+                if (token !== this.crateSequenceToken) {
+                  return;
+                }
+
+                this.placeLettersInsideCrate(crateNode, letters);
+                this.dropLettersIntoCrate(word, letters, crateNode, letters.length - 1, token);
+              }, this.crateHoverHoldDuration);
             }
           })
           .start();
@@ -1963,6 +1976,51 @@ export class GameCore extends Component {
   /**
    * Показать эффект ошибки
    */
+  private bringFailEffectToFront(): void {
+    if (!this.failEffect?.isValid) {
+      return;
+    }
+
+    const canvas = this.findCanvasNode();
+    if (!canvas) {
+      return;
+    }
+
+    if (!this.failEffectHomeParent?.isValid) {
+      this.failEffectHomeParent = this.failEffect.parent;
+      this.failEffectHomeSiblingIndex = this.failEffect.getSiblingIndex();
+    }
+
+    const worldPos = this.failEffect.worldPosition.clone();
+    const worldScale = this.failEffect.worldScale.clone();
+
+    if (this.failEffect.parent !== canvas) {
+      this.failEffect.setParent(canvas, true);
+    }
+
+    this.failEffect.worldPosition = worldPos;
+    this.failEffect.worldScale = worldScale;
+    this.failEffect.setSiblingIndex(canvas.children.length - 1);
+  }
+
+  private restoreFailEffectHome(): void {
+    if (!this.failEffect?.isValid || !this.failEffectHomeParent?.isValid) {
+      return;
+    }
+
+    if (this.failEffect.parent === this.failEffectHomeParent) {
+      this.failEffect.setSiblingIndex(this.failEffectHomeSiblingIndex);
+      return;
+    }
+
+    const worldPos = this.failEffect.worldPosition.clone();
+    const worldScale = this.failEffect.worldScale.clone();
+    this.failEffect.setParent(this.failEffectHomeParent, true);
+    this.failEffect.worldPosition = worldPos;
+    this.failEffect.worldScale = worldScale;
+    this.failEffect.setSiblingIndex(this.failEffectHomeSiblingIndex);
+  }
+
   private showFailEffect(): void {
     if (!this.failEffect) {
       return;
@@ -1970,6 +2028,7 @@ export class GameCore extends Component {
 
     this.unschedule(this.hideFailEffect);
     this.resetFailVisual();
+    this.bringFailEffectToFront();
     this.failEffect.active = true;
     this.audioController?.playFailWrong();
     this.playFailAnimation();
@@ -1984,6 +2043,7 @@ export class GameCore extends Component {
 
     this.resetFailVisual();
     this.failEffect.active = false;
+    this.restoreFailEffectHome();
   }
 
   /**
