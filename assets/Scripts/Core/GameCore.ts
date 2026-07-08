@@ -4,6 +4,73 @@ import { AudioController } from '../Audio/audio-controller';
 import plbx from '../plbx_html/plbx_html_playable';
 const { ccclass, property } = _decorator;
 
+enum AppLovinEvent {
+  DISPLAYED = 'DISPLAYED',
+  CHALLENGE_STARTED = 'CHALLENGE_STARTED',
+  CHALLENGE_PASS_25 = 'CHALLENGE_PASS_25',
+  CHALLENGE_PASS_50 = 'CHALLENGE_PASS_50',
+  CHALLENGE_PASS_75 = 'CHALLENGE_PASS_75',
+  CHALLENGE_SOLVED = 'CHALLENGE_SOLVED',
+  ENDCARD_SHOWN = 'ENDCARD_SHOWN',
+}
+
+class AppLovinAnalyticsManager {
+  private readonly sentEvents: Set<string> = new Set();
+  private readonly queuedEvents: Set<string> = new Set();
+  private readonly eventQueue: AppLovinEvent[] = [];
+  private isDrainingQueue: boolean = false;
+  private lastSentAtMs: number = 0;
+  private readonly minEventSpacingMs: number = 75;
+
+  public send(eventName: AppLovinEvent): void {
+    if (this.sentEvents.has(eventName) || this.queuedEvents.has(eventName)) {
+      return;
+    }
+    this.queuedEvents.add(eventName);
+    this.eventQueue.push(eventName);
+    this.drainQueue();
+  }
+
+  private drainQueue(): void {
+    if (this.isDrainingQueue || this.eventQueue.length === 0) {
+      return;
+    }
+    this.isDrainingQueue = true;
+
+    const elapsedMs = Date.now() - this.lastSentAtMs;
+    const delayMs = this.lastSentAtMs === 0 ? 0 : Math.max(0, this.minEventSpacingMs - elapsedMs);
+
+    setTimeout(() => {
+      const eventName = this.eventQueue.shift();
+      if (eventName) {
+        this.sendNow(eventName);
+      }
+      this.isDrainingQueue = false;
+      this.drainQueue();
+    }, delayMs);
+  }
+
+  private sendNow(eventName: AppLovinEvent): void {
+    this.queuedEvents.delete(eventName);
+    this.sentEvents.add(eventName);
+    this.lastSentAtMs = Date.now();
+
+    try {
+      // @ts-ignore AppLovin injects this object in production.
+      if (typeof window !== 'undefined' && typeof window.ALPlayableAnalytics !== 'undefined') {
+        // @ts-ignore AppLovin SDK runtime API.
+        window.ALPlayableAnalytics.trackEvent(eventName);
+      }
+    } catch {
+      // Ignore analytics errors during local testing or on other networks.
+    }
+
+    console.log(`[AppLovin] Event sent: ${eventName}`);
+  }
+}
+
+const applovinAnalytics = new AppLovinAnalyticsManager();
+
 /**
  * Одна буква в стопке
  */
@@ -79,6 +146,9 @@ export class GameCore extends Component {
 
   @property({ type: CCFloat, tooltip: 'Скорость руки-подсказки (1 = медленно, 2 = в 2 раза быстрее)' })
   handHintSpeed: number = 1;
+
+  @property({ type: CCFloat, tooltip: 'Пауза бездействия перед показом руки (сек)' })
+  handHintIdleDelaySeconds: number = 4;
 
   // ===== ПАРАМЕТРЫ =====
 
@@ -223,7 +293,13 @@ export class GameCore extends Component {
   private musicAudioSource: AudioSource | null = null;
   private screenTapCount: number = 0;
   private isCtaShown: boolean = false;
+  private isCtaClickHandled: boolean = false;
   private lastTapTime: number = 0;
+  private challengeStartedSent: boolean = false;
+  private challengePass25Sent: boolean = false;
+  private challengePass50Sent: boolean = false;
+  private challengePass75Sent: boolean = false;
+  private challengeSolvedSent: boolean = false;
   private static readonly TAP_DEBOUNCE_MS = 150;
   private canvasTapNode: Node | null = null;
   private handHintToken: number = 0;
@@ -234,6 +310,19 @@ export class GameCore extends Component {
   private static readonly HAND_HINT_TAP_DURATION = 0.12;
   private static readonly HAND_HINT_IDLE_DELAY = 0.35;
   private static readonly HAND_HINT_RETRY_DELAY = 0.4;
+  private readonly triggerHandHintAfterIdle = (): void => {
+    if (this.usedWords.has('APPLE') || this.isCtaShown) {
+      this.stopHandHint();
+      return;
+    }
+
+    if (this.isProcessing || this.isSelectFeedbackPlaying) {
+      this.scheduleHandHintAfterIdle();
+      return;
+    }
+
+    this.refreshHandHintProgress();
+  };
   private readonly onCanvasResize = (): void => {
     this.setupCanvasTapListeners();
     this.setupSystemInput();
@@ -255,6 +344,7 @@ export class GameCore extends Component {
     this.setupGlobalInput();
     this.setupHandHint();
     plbx.game_ready();
+    applovinAnalytics.send(AppLovinEvent.DISPLAYED);
   }
 
   onDestroy(): void {
@@ -264,6 +354,7 @@ export class GameCore extends Component {
     this.audioController?.stop();
     this.audioController = null;
     this.musicAudioSource = null;
+    this.unschedule(this.triggerHandHintAfterIdle);
     this.stopHandHint();
   }
 
@@ -423,6 +514,10 @@ export class GameCore extends Component {
 
     this.resetCtaVisual();
     cta.active = false;
+    this.isCtaClickHandled = false;
+    // CTA-клик обрабатывает ТОЛЬКО кнопка play_now_button (StoreLinkButton).
+    // Никаких обработчиков клика на весь CTAScreen не вешаем — иначе TikTok-валидатор
+    // фиксирует openAppStore не по клику кнопки.
     console.log(`✓ GameCore: CTA скрыт, показ после ${this.ctaTapCount} нажатий`);
   }
 
@@ -528,11 +623,61 @@ export class GameCore extends Component {
 
       this.handHintBaseScale = hand.scale.clone();
       hand.active = false;
+      const opacity = hand.getComponent(UIOpacity) ?? hand.addComponent(UIOpacity);
+      opacity.opacity = 0;
 
       if (!this.usedWords.has('APPLE')) {
-        this.startHandHintLoop();
+        this.scheduleHandHintAfterIdle();
       }
     });
+  }
+
+  private scheduleHandHintAfterIdle(): void {
+    this.unschedule(this.triggerHandHintAfterIdle);
+    if (this.usedWords.has('APPLE') || this.isCtaShown) {
+      return;
+    }
+
+    const delay = Math.max(0.1, this.handHintIdleDelaySeconds);
+    this.scheduleOnce(this.triggerHandHintAfterIdle, delay);
+  }
+
+  private onPlayerActivity(): void {
+    if (this.usedWords.has('APPLE') || this.isCtaShown) {
+      return;
+    }
+
+    this.stopHandHint();
+    this.scheduleHandHintAfterIdle();
+  }
+
+  private snapHandHintToCurrentTarget(): boolean {
+    if (this.usedWords.has('APPLE')) {
+      return false;
+    }
+
+    const hand = this.resolveHandHint();
+    if (!hand?.isValid) {
+      return false;
+    }
+
+    const sequence = GameCore.HAND_HINT_SEQUENCE;
+    const stepIndex = this.getHandHintNextStepIndex();
+    if (stepIndex >= sequence.length) {
+      return false;
+    }
+
+    const letter = sequence[stepIndex];
+    const target = this.findTappableNodeForLetter(
+      letter,
+      this.getHandHintExcludeNodes()
+    );
+    if (!target) {
+      return false;
+    }
+
+    hand.worldPosition = this.getHandHintWorldPosition(target);
+    return true;
   }
 
   private startHandHintLoop(): void {
@@ -543,11 +688,38 @@ export class GameCore extends Component {
 
       Tween.stopAllByTarget(hand);
       this.handHintToken++;
+      const token = this.handHintToken;
       hand.active = true;
       hand.scale = this.handHintBaseScale.clone();
       hand.setSiblingIndex(hand.parent.children.length - 1);
-      this.playHandHintStep(this.handHintToken);
+      this.snapHandHintToCurrentTarget();
+      this.playHandHintFadeIn(hand, () => {
+        if (token !== this.handHintToken) {
+          return;
+        }
+        this.playHandHintStep(token, true);
+      });
     });
+  }
+
+  private playHandHintFadeIn(hand: Node, onComplete?: () => void): void {
+    const opacity = hand.getComponent(UIOpacity) ?? hand.addComponent(UIOpacity);
+    Tween.stopAllByTarget(opacity);
+    Tween.stopAllByTarget(hand);
+    opacity.opacity = 0;
+    const startScale = new Vec3(
+      this.handHintBaseScale.x * 0.96,
+      this.handHintBaseScale.y * 0.96,
+      this.handHintBaseScale.z
+    );
+    hand.scale = startScale;
+    tween(opacity)
+      .to(0.5, { opacity: 255 }, { easing: 'sineInOut' })
+      .call(() => onComplete?.())
+      .start();
+    tween(hand)
+      .to(0.5, { scale: this.handHintBaseScale.clone() }, { easing: 'sineOut' })
+      .start();
   }
 
   private stopHandHint(): void {
@@ -557,6 +729,9 @@ export class GameCore extends Component {
     }
 
     Tween.stopAllByTarget(this.handHint);
+    const opacity = this.handHint.getComponent(UIOpacity) ?? this.handHint.addComponent(UIOpacity);
+    Tween.stopAllByTarget(opacity);
+    opacity.opacity = 0;
     this.handHint.active = false;
     this.handHint.scale = this.handHintBaseScale.clone();
   }
@@ -596,6 +771,7 @@ export class GameCore extends Component {
       const token = this.handHintToken;
       Tween.stopAllByTarget(hand);
       hand.active = true;
+      this.snapHandHintToCurrentTarget();
       if (hand.parent) {
         hand.setSiblingIndex(hand.parent.children.length - 1);
       }
@@ -606,11 +782,16 @@ export class GameCore extends Component {
         return;
       }
 
-      this.playHandHintStep(token);
+      this.playHandHintFadeIn(hand, () => {
+        if (token !== this.handHintToken) {
+          return;
+        }
+        this.playHandHintStep(token, true);
+      });
     });
   }
 
-  private playHandHintStep(token: number): void {
+  private playHandHintStep(token: number, snapToTarget: boolean = false): void {
     const hand = this.resolveHandHint();
     if (!hand || token !== this.handHintToken) {
       return;
@@ -651,8 +832,24 @@ export class GameCore extends Component {
     );
 
     Tween.stopAllByTarget(hand);
-    const moveDuration = this.getHandHintDuration(GameCore.HAND_HINT_MOVE_DURATION);
     const tapDuration = this.getHandHintDuration(GameCore.HAND_HINT_TAP_DURATION);
+    if (snapToTarget) {
+      hand.worldPosition = targetPos;
+      hand.scale = this.handHintBaseScale.clone();
+      tween(hand)
+        .to(tapDuration, { scale: pulseScale }, { easing: 'quadOut' })
+        .to(tapDuration, { scale: this.handHintBaseScale.clone() }, { easing: 'quadIn' })
+        .call(() => {
+          if (token !== this.handHintToken) {
+            return;
+          }
+          this.playHandHintPulseLoop(stepIndex, token);
+        })
+        .start();
+      return;
+    }
+
+    const moveDuration = this.getHandHintDuration(GameCore.HAND_HINT_MOVE_DURATION);
     tween(hand)
       .to(moveDuration, { worldPosition: targetPos }, { easing: 'sineInOut' })
       .to(tapDuration, { scale: pulseScale }, { easing: 'quadOut' })
@@ -727,15 +924,20 @@ export class GameCore extends Component {
     const pos = target.worldPosition.clone();
     const letterUi = target.getComponent(UITransform);
     if (letterUi) {
+      const letterHalfW = (letterUi.contentSize.width * Math.abs(target.worldScale.x)) / 2;
       const letterHalfH = (letterUi.contentSize.height * Math.abs(target.worldScale.y)) / 2;
-      pos.y -= letterHalfH * 0.55;
+      // Ставим руку к правому нижнему углу буквы.
+      pos.x += letterHalfW * 0.72;
+      pos.y -= letterHalfH * 0.7;
     }
 
     const handUi = this.handHint?.getComponent(UITransform);
     if (handUi) {
       const handHalfH = (handUi.contentSize.height * Math.abs(this.handHint.worldScale.y)) / 2;
-      // Палец в верхней части спрайта — опускаем pivot руки ещё ниже
-      pos.y -= handHalfH * 0.42;
+      const handHalfW = (handUi.contentSize.width * Math.abs(this.handHint.worldScale.x)) / 2;
+      // Компенсируем размер руки, чтобы её палец оставался на правом нижнем углу буквы.
+      pos.x += handHalfW * 0.12;
+      pos.y -= handHalfH * 1.3;
     }
 
     pos.y += this.handHintOffsetY;
@@ -802,6 +1004,7 @@ export class GameCore extends Component {
 
     this.screenTapCount++;
     plbx.tap();
+    this.trackChallengeProgressByTaps();
     console.log(`👆 Нажатие ${this.screenTapCount}/${this.ctaTapCount}`);
 
     if (this.screenTapCount >= this.ctaTapCount) {
@@ -816,7 +1019,14 @@ export class GameCore extends Component {
     }
 
     this.isCtaShown = true;
-    plbx.game_end();
+    this.isCtaClickHandled = false;
+    if (!this.challengeSolvedSent) {
+      this.challengeSolvedSent = true;
+      this.reportChallengeEvent(AppLovinEvent.CHALLENGE_SOLVED);
+      this.reportChallengeEvent(AppLovinEvent.ENDCARD_SHOWN);
+    }
+    // game_end() / reportGameClose() переносится в момент клика по CTA (StoreLinkButton),
+    // а не в момент показа endcard — так требует валидатор TikTok.
     this.ctaScreen = cta;
 
     Tween.stopAllByTarget(cta);
@@ -839,6 +1049,41 @@ export class GameCore extends Component {
     }
 
     console.log(`📢 GameCore: CTA показан (нажатий: ${this.screenTapCount})`);
+  }
+
+  private getChallengeTapThreshold(fraction: number): number {
+    const total = Math.max(1, Math.floor(this.ctaTapCount));
+    return Math.max(1, Math.ceil(total * fraction));
+  }
+
+  private reportChallengeEvent(eventName: AppLovinEvent): void {
+    applovinAnalytics.send(eventName);
+  }
+
+  private trackChallengeProgressByTaps(): void {
+    if (!this.challengeStartedSent) {
+      this.challengeStartedSent = true;
+      this.reportChallengeEvent(AppLovinEvent.CHALLENGE_STARTED);
+    }
+
+    const pass25Threshold = this.getChallengeTapThreshold(0.25);
+    const pass50Threshold = this.getChallengeTapThreshold(0.5);
+    const pass75Threshold = this.getChallengeTapThreshold(0.75);
+
+    if (!this.challengePass25Sent && this.screenTapCount >= pass25Threshold) {
+      this.challengePass25Sent = true;
+      this.reportChallengeEvent(AppLovinEvent.CHALLENGE_PASS_25);
+    }
+
+    if (!this.challengePass50Sent && this.screenTapCount >= pass50Threshold) {
+      this.challengePass50Sent = true;
+      this.reportChallengeEvent(AppLovinEvent.CHALLENGE_PASS_50);
+    }
+
+    if (!this.challengePass75Sent && this.screenTapCount >= pass75Threshold) {
+      this.challengePass75Sent = true;
+      this.reportChallengeEvent(AppLovinEvent.CHALLENGE_PASS_75);
+    }
   }
 
   private getFailAnimation(): Animation | null {
@@ -1109,6 +1354,13 @@ export class GameCore extends Component {
   }
 
   private onScreenTap(): void {
+    if (this.isCtaShown) {
+      // CTA-клик обрабатывает ТОЛЬКО сама кнопка play_now_button (StoreLinkButton).
+      // Глобальный тап по экрану не должен вызывать openAppStore — иначе TikTok-валидатор
+      // видит клик не по кнопке, и сама кнопка перестаёт быть кликабельной.
+      return;
+    }
+    this.onPlayerActivity();
     this.registerScreenTap();
   }
 
@@ -1190,7 +1442,7 @@ export class GameCore extends Component {
 
     // Добавить в выбор
     this.selectedLetters.push(topLetter);
-    this.refreshHandHintProgress();
+    this.onPlayerActivity();
 
     const invalidSelection = this.shouldTriggerFailOnSelection();
 
@@ -1882,7 +2134,7 @@ export class GameCore extends Component {
     this.scheduleOnce(() => {
       this.returnLettersToStacks();
       this.clearSelection();
-      this.refreshHandHintProgress();
+      this.scheduleHandHintAfterIdle();
       this.isProcessing = false;
     }, 0.4);
   }

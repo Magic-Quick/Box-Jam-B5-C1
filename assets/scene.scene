@@ -9757,6 +9757,7 @@
     },
     "handHintOffsetY": 55,
     "handHintSpeed": 1,
+    "handHintIdleDelaySeconds": 2,
     "selectScale": 1.2,
     "animDuration": 0.25,
     "letterSpacing": 60,
